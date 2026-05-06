@@ -1,0 +1,29 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ns0:busDefinition xmlns:ns0="http://www.accellera.org/XMLSchema/IPXACT/1685-2014"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.accellera.org/XMLSchema/IPXACT/1685-2014 http://www.accellera.org/XMLSchema/IPXACT/1685-2014/index.xsd">
+    <ns0:vendor>Phytium</ns0:vendor>
+    <ns0:library>LowSpeedDevice</ns0:library>
+    <ns0:name>axi</ns0:name>
+    <ns0:version>1.0</ns0:version>
+    <ns0:description>New bus definition</ns0:description>
+    <ns0:signalDefinitions>
+        <ns0:signalDefinition>
+            <ns0:name>rdata</ns0:name>
+            <ns0:width>32</ns0:width>
+            <ns0:presence>required</ns0:presence>
+            <ns0:driver>any</ns0:driver>
+        </ns0:signalDefinition>
+        <ns0:signalDefinition>
+            <ns0:name>wdata</ns0:name>
+            <ns0:width>32</ns0:width>
+            <ns0:presence>required</ns0:presence>
+            <ns0:driver>any</ns0:driver>
+        </ns0:signalDefinition>
+        <ns0:signalDefinition>
+            <ns0:name>signal_3</ns0:name>
+            <ns0:width>32</ns0:width>
+            <ns0:presence>required</ns0:presence>
+            <ns0:driver>any</ns0:driver>
+        </ns0:signalDefinition>
+    </ns0:signalDefinitions>
+</ns0:busDefinition>

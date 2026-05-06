@@ -1,0 +1,2 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ipxact:component xmlns:ipxact="http://www.accellera.org/XMLSchema/IPXACT/1685-2014"><ipxact:vendor>Phytium</ipxact:vendor><ipxact:library>LowSpeedDevice</ipxact:library><ipxact:name>NewComponent</ipxact:name><ipxact:version>1.0</ipxact:version><ipxact:description /><ipxact:model><ipxact:ports /><ipxact:parameters /><ipxact:localParameters /><ipxact:componentInstances><ipxact:interconnections /></ipxact:componentInstances></ipxact:model></ipxact:component>
