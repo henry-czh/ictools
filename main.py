@@ -8,10 +8,9 @@ from jinja2 import Environment, FileSystemLoader
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QListWidget, QTreeWidget, QTreeWidgetItem, QTextEdit, QMenuBar, 
                              QAction, QFileDialog, QMessageBox, QGraphicsView, QPushButton, 
-                             QDialog, QLineEdit, QLabel, QInputDialog, QMenu, QGroupBox, 
-                             QGridLayout, QComboBox, QTableWidget, QTableWidgetItem, QGraphicsRectItem, QStyle)
-from PyQt5.QtCore import Qt, QMimeData, QPoint, QEvent
-from PyQt5.QtGui import QDrag, QPen, QBrush, QColor, QPainter, QIcon
+                             QDialog, QLineEdit, QLabel, QMenu, QSplitter) 
+from PyQt5.QtCore import Qt, QMimeData, QEvent, QObject, pyqtSignal
+from PyQt5.QtGui import QDrag, QIcon
 from src.ipxact_parser import IPXactParser
 from src.ipxact_writer import IPXactWriter
 from NodeGraphQt import BaseNode, NodeGraph
@@ -20,6 +19,34 @@ from src.nodegraph_tools import (get_all_connections, make_template_node,
 from src.portInfoDialog import PortInfoDialog 
 from src.newBusDefDialog import NewBusDefDialog
 from src.newComponentDialog import NewComponentDialog
+from src.terminal_widget import TerminalWidget
+
+# 自定义输出流类，用于将print重定向到details_panel
+class PanelOutputStream(QObject):
+    """自定义输出流，将输出发送到QTextEdit"""
+    new_output = pyqtSignal(str)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.buffer = []
+    
+    def write(self, text):
+        # 忽略空行
+        if text.strip():
+            # 添加时间戳
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            self.buffer.append(f"[{timestamp}] {text}")
+            # 发送信号
+            self.new_output.emit(f"[{timestamp}] {text}")
+    
+    def flush(self):
+        pass
+    
+    def get_buffer(self):
+        return self.buffer
+    
+    def clear_buffer(self):
+        self.buffer = []
 
 def get_config_path():
     """获取配置文件路径"""
@@ -169,7 +196,6 @@ class CustomNodeGraph(NodeGraph):
         selected_nodes = self.selected_nodes()
         if selected_nodes and self._node_double_click_callback:
             clicked_node = selected_nodes[0]
-            print(f"双击事件触发，使用选中的节点: {clicked_node.name()}")
             self._node_double_click_callback(clicked_node)
             event.accept()
         else:
@@ -177,61 +203,85 @@ class CustomNodeGraph(NodeGraph):
             self._original_mouse_double_click(event)
     
 class LibraryConfigDialog(QDialog):
-    """Library库配置对话框"""
-    def __init__(self, parent=None, library_dir=""):
+    """Library库配置对话框 - 支持多个Library目录"""
+    def __init__(self, parent=None, library_dirs=None):
         super().__init__(parent)
         self.setWindowTitle("Library库配置")
-        self.setGeometry(100, 100, 400, 150)
+        self.setGeometry(100, 100, 500, 300)
+        
+        # 确保 library_dirs 是列表
+        if library_dirs is None:
+            library_dirs = []
+        elif isinstance(library_dirs, str):
+            # 兼容旧格式（单个目录）
+            library_dirs = [library_dirs] if library_dirs else []
         
         # 创建布局
         layout = QVBoxLayout(self)
         
-        # 目录选择区域
-        dir_layout = QHBoxLayout()
+        # 目录列表区域
+        list_layout = QVBoxLayout()
         
         # 标签
-        dir_label = QLabel("库目录:")
-        dir_layout.addWidget(dir_label)
+        list_label = QLabel("Library目录列表:")
+        list_layout.addWidget(list_label)
         
-        # 文本框显示选定的目录
-        self.dir_line_edit = QLineEdit()
-        self.dir_line_edit.setReadOnly(True)
-        dir_layout.addWidget(self.dir_line_edit)
+        # 列表控件
+        self.dir_list = QListWidget()
+        self.dir_list.addItems(library_dirs)
+        list_layout.addWidget(self.dir_list)
         
-        # 浏览按钮
-        browse_button = QPushButton("浏览...")
-        browse_button.clicked.connect(self.browse_directory)
-        dir_layout.addWidget(browse_button)
+        layout.addLayout(list_layout)
         
-        layout.addLayout(dir_layout)
-        
-        # 确定和取消按钮
+        # 按钮区域
         button_layout = QHBoxLayout()
         
-        ok_button = QPushButton("确定")
-        ok_button.clicked.connect(self.accept)
-        button_layout.addWidget(ok_button)
+        # 添加按钮
+        add_button = QPushButton("添加")
+        add_button.clicked.connect(self.add_directory)
+        button_layout.addWidget(add_button)
         
-        cancel_button = QPushButton("取消")
-        cancel_button.clicked.connect(self.reject)
-        button_layout.addWidget(cancel_button)
+        # 删除按钮
+        remove_button = QPushButton("删除")
+        remove_button.clicked.connect(self.remove_directory)
+        button_layout.addWidget(remove_button)
         
         layout.addLayout(button_layout)
         
-        # 存储选定的目录
-        self.selected_directory = library_dir
-        # 设置初始目录
-        self.dir_line_edit.setText(library_dir)
+        # 确定和取消按钮
+        ok_cancel_layout = QHBoxLayout()
+        
+        ok_button = QPushButton("确定")
+        ok_button.clicked.connect(self.accept)
+        ok_cancel_layout.addWidget(ok_button)
+        
+        cancel_button = QPushButton("取消")
+        cancel_button.clicked.connect(self.reject)
+        ok_cancel_layout.addWidget(cancel_button)
+        
+        layout.addLayout(ok_cancel_layout)
+        
+        # 存储选定的目录列表
+        self.selected_directories = library_dirs
     
-    def browse_directory(self):
+    def add_directory(self):
         # 打开目录选择对话框
         directory = QFileDialog.getExistingDirectory(self, "选择Library库目录")
-        if directory:
-            self.selected_directory = directory
-            self.dir_line_edit.setText(directory)
+        if directory and directory not in self.selected_directories:
+            self.selected_directories.append(directory)
+            self.dir_list.addItem(directory)
     
-    def get_selected_directory(self):
-        return self.selected_directory
+    def remove_directory(self):
+        # 删除选中的目录
+        selected_items = self.dir_list.selectedItems()
+        for item in selected_items:
+            directory = item.text()
+            if directory in self.selected_directories:
+                self.selected_directories.remove(directory)
+            self.dir_list.takeItem(self.dir_list.row(item))
+    
+    def get_selected_directories(self):
+        return self.selected_directories
 
 class ComponentListWidget(QTreeWidget):
     """自定义的Component树状列表，支持拖拽功能"""
@@ -416,20 +466,21 @@ class ComponentListWidget(QTreeWidget):
                 reply = QMessageBox.question(self, "确认", f"确定要删除组件 {component_name} 吗？", 
                                             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
                 if reply == QMessageBox.Yes:
-                    # 删除对应的XML文件
-                    xml_filename = f"{component_name}_{component_version}.xml"
-                    xml_file_path = os.path.join(self.main_window.library_directory, xml_filename)
-                    if os.path.exists(xml_file_path):
-                        try:
-                            os.remove(xml_file_path)
-                            print(f"删除文件: {xml_file_path}")
-                        except Exception as e:
-                            print(f"删除文件失败: {e}")
-                    
-                    # 从components列表中删除
+                    # 先从components列表中删除
                     self.main_window.components.pop(component_index)
                     
-                    # 更新component_list
+                    # 从component中获取XML文件路径并删除
+                    xml_file_path = component.get('xml_file_path')
+                    if xml_file_path and os.path.exists(xml_file_path):
+                        try:
+                            os.remove(xml_file_path)
+                            print(f"已删除文件: {xml_file_path}")
+                        except Exception as e:
+                            print(f"删除文件失败: {e}")
+                    else:
+                        print(f"未找到对应的XML文件路径")
+                    
+                    # 更新component_list（只更新UI，不重新扫描文件）
                     self.main_window.update_component_list()
                     
                     QMessageBox.information(self, "成功", f"成功删除组件: {component_name}")
@@ -446,6 +497,19 @@ class IPXactVisualizer(QMainWindow):
         self.writer = IPXactWriter()
         self.components = []
         
+        # 日志管理
+        self.log_max_lines = 500
+        self.log_file_path = os.path.join(os.path.expanduser("~"), ".config", "ipxact_visualizer", "app.log")
+        # 确保日志目录存在
+        os.makedirs(os.path.dirname(self.log_file_path), exist_ok=True)
+        
+        # 创建自定义输出流，重定向print
+        self.panel_output_stream = PanelOutputStream()
+        self.panel_output_stream.new_output.connect(self.append_to_details_panel)
+        # 保存原始stdout
+        self.original_stdout = sys.stdout
+        sys.stdout = self.panel_output_stream
+        
         # 创建菜单栏
         self.create_menu_bar()
         
@@ -459,14 +523,12 @@ class IPXactVisualizer(QMainWindow):
         self.component_list.set_main_window(self)
         self.component_list.setHeaderLabel("IP Library")
         self.component_list.setHeaderHidden(False)
-        self.component_list.setMaximumWidth(250)
         self.component_list.itemClicked.connect(self.on_component_selected)
         
         # 左侧project列表
         self.project_panel = QTreeWidget()
         self.project_panel.setHeaderLabel("Project ")
         self.project_panel.setHeaderHidden(False)
-        self.project_panel.setMaximumWidth(250)
         self.project_panel.itemClicked.connect(self.on_project_selected)
         # 添加右键菜单
         self.project_panel.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -523,18 +585,42 @@ class IPXactVisualizer(QMainWindow):
             view.dragEnterEvent = self.on_workspace_drag_enter
             view.dropEvent = self.on_workspace_drop
         
-        # 详细信息窗口
-        self.details_panel = QTextEdit()
-        self.details_panel.setMaximumHeight(200)
+        # 终端窗口
+        self.terminal = TerminalWidget(working_dir=os.getcwd())
+        self.terminal.setMinimumHeight(100)
+        self.terminal.setMaximumHeight(500)
         
-        # 组装布局
-        right_layout.addWidget(self.graph.widget, 1)
-        right_layout.addWidget(self.details_panel, 0)
+        # 创建QSplitter用于调整graph和terminal的大小
+        self.splitter = QSplitter(Qt.Vertical)
+        self.splitter.addWidget(self.graph.widget)
+        self.splitter.addWidget(self.terminal)
+        # 设置初始比例（graph占大部分空间）
+        self.splitter.setSizes([600, 200])
+        # 设置拉伸因子
+        self.splitter.setStretchFactor(0, 1)  # graph可以拉伸
+        self.splitter.setStretchFactor(1, 0)  # terminal保持固定大小
         
+        # 组装左侧布局
         left_layout.addWidget(self.project_panel, 0)
         left_layout.addWidget(self.component_list, 1)
-        main_layout.addLayout(left_layout, 0)
-        main_layout.addLayout(right_layout, 1)
+        
+        # 创建左侧区域容器
+        left_widget = QWidget()
+        left_widget.setLayout(left_layout)
+        left_widget.setMinimumWidth(200)  # 设置最小宽度（不再限制最大宽度）
+        
+        # 创建主QSplitter用于调整左侧区域和右侧工作区的大小
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        self.main_splitter.addWidget(left_widget)
+        self.main_splitter.addWidget(self.splitter)
+        # 设置初始比例
+        self.main_splitter.setSizes([250, 950])
+        # 设置拉伸因子 - 两侧都可以拉伸
+        self.main_splitter.setStretchFactor(0, 1)  # 左侧可以拉伸
+        self.main_splitter.setStretchFactor(1, 1)  # 右侧可以拉伸
+        
+        # 组装主布局
+        main_layout.addWidget(self.main_splitter, 1)
         
         # 存储连线关系
         self.connections = []
@@ -555,7 +641,6 @@ class IPXactVisualizer(QMainWindow):
     def on_node_double_clicked(self, node):
         """处理节点双击事件，显示端口信息"""
         node_name = node.name()
-        print(f"双击节点: {node_name}")
         
         # 获取节点的端口信息
         ports_info = self.get_node_ports_info(node)
@@ -610,7 +695,6 @@ class IPXactVisualizer(QMainWindow):
         if selected_nodes:
             for node in selected_nodes:
                 self.graph.delete_node(node)
-            print(f"已删除 {len(selected_nodes)} 个节点")
         else:
             QMessageBox.warning(self, "警告", "请先选择要删除的节点")
     
@@ -618,103 +702,96 @@ class IPXactVisualizer(QMainWindow):
         """加载Library库配置"""
         try:
             config = load_config()
-            if config and "library_directory" in config:
-                library_dir = config["library_directory"]
-                if os.path.exists(library_dir):
-                    self.library_directory = library_dir
-                    print(f"从配置文件加载Library库目录: {library_dir}")
-                    # 自动加载Library库
-                    self.load_library_from_directory(library_dir)
-                else:
-                    print(f"配置文件中的Library库目录不存在: {library_dir}")
+            if config:
+                # 支持多个Library目录（新格式）
+                if "library_directories" in config:
+                    library_dirs = config["library_directories"]
+                    if isinstance(library_dirs, list) and library_dirs:
+                        self.library_directories = library_dirs
+                        # 自动加载所有Library库
+                        self.load_library_from_directories(library_dirs)
+                # 兼容旧格式（单个目录）
+                elif "library_directory" in config:
+                    library_dir = config["library_directory"]
+                    if os.path.exists(library_dir):
+                        self.library_directories = [library_dir]
+                        # 自动加载Library库
+                        self.load_library_from_directories([library_dir])
+                    else:
+                        print(f"配置文件中的Library库目录不存在: {library_dir}")
         except Exception as e:
             print(f"加载Library库配置失败: {e}")
         
         # 加载保存的graphs
         self.load_graphs_from_files()
     
-    def load_library_from_directory(self, library_dir):
-        """从指定目录加载Library库"""
+    def load_library_from_directories(self, library_dirs):
+        """从多个目录加载Library库（去重）"""
         try:
             import glob
-            # 从IP子目录读取XML文件
-            ip_dir = os.path.join(library_dir, "IP")
-            if os.path.exists(ip_dir):
-                xml_files = glob.glob(os.path.join(ip_dir, "*.xml"))
-            else:
-                # 如果IP子目录不存在，尝试从根目录读取（兼容旧版本）
-                xml_files = glob.glob(os.path.join(library_dir, "*.xml"))
-            print(f"找到 {len(xml_files)} 个XML文件")
             
             # 清空现有的components列表
             self.components = []
             
-            # 解析每个XML文件
-            for xml_file in xml_files:
-                try:
-                    components = self.parser.parse_file(xml_file)
-                    self.components.extend(components)
-                    print(f"解析文件: {xml_file}, 找到 {len(components)} 个components")
-                except Exception as e:
-                    print(f"解析文件 {xml_file} 时出错: {e}")
+            # 用于记录已加载的component（避免重复）
+            loaded_components = set()
             
-            # 清空component_list并添加解析结果
-            self.component_list.clear()
+            # 用于记录已处理的目录（避免重复扫描）
+            processed_dirs = set()
             
-            # 构建三层结构：vendor -> library -> component
-            vendor_dict = {}
-            
-            for i, component in enumerate(self.components):
-                component_name = component.get('name', '未知组件')
-                vendor = component.get('vendor', 'UnknownVendor')
-                library = component.get('library', 'UnknownLibrary')
-                version = component.get('version', '1.0').replace('.', '_')
+            # 遍历所有目录
+            for library_dir in library_dirs:
+                # 获取绝对路径
+                abs_library_dir = os.path.abspath(library_dir)
                 
-                # 检查节点类型是否已经注册过
-                node_identifier = f"user.{component_name}_{version}_node"
-                if node_identifier in self.graph.registered_nodes():
-                    print(f"节点类型 '{node_identifier}' 已经注册过，跳过")
+                # 跳过空目录和重复目录
+                if not abs_library_dir or abs_library_dir in processed_dirs:
                     continue
                 
-                # 构建vendor -> library -> component结构
-                if vendor not in vendor_dict:
-                    vendor_dict[vendor] = {}
+                processed_dirs.add(abs_library_dir)
                 
-                if library not in vendor_dict[vendor]:
-                    vendor_dict[vendor][library] = []
+                # 从IP子目录读取XML文件
+                ip_dir = os.path.join(library_dir, "IP")
+                if os.path.exists(ip_dir):
+                    xml_files = glob.glob(os.path.join(ip_dir, "*.xml"))
+                else:
+                    # 如果IP子目录不存在，尝试从根目录读取（兼容旧版本）
+                    xml_files = glob.glob(os.path.join(library_dir, "*.xml"))
                 
-                vendor_dict[vendor][library].append((i, component))
-                
-                try:
-                    TemplateClass = make_template_node(None, f"{component_name}_{version}", node_data=component)
-                    # 注册节点类型
-                    self.graph.register_node(TemplateClass)
-                except Exception as e:
-                    print(f"注册节点失败: {e}")
+                # 解析每个XML文件
+                for xml_file in xml_files:
+                    try:
+                        components = self.parser.parse_file(xml_file)
+                        for component in components:
+                            # 记录XML文件路径（用于后续删除）
+                            component['xml_file_path'] = xml_file
+                            
+                            # 生成唯一标识（vendor_library_name_version）
+                            comp_vendor = component.get('vendor', '')
+                            comp_library = component.get('library', '')
+                            comp_name = component.get('name', '')
+                            comp_version = component.get('version', '')
+                            comp_key = f"{comp_vendor}_{comp_library}_{comp_name}_{comp_version}"
+                            
+                            # 检查是否已加载
+                            if comp_key not in loaded_components:
+                                self.components.append(component)
+                                loaded_components.add(comp_key)
+                            else:
+                                print(f"跳过重复component: {comp_vendor}/{comp_library}/{comp_name} v{comp_version}")
+                    except Exception as e:
+                        print(f"解析文件 {xml_file} 时出错: {e}")
             
-            # 添加到component_list
-            for vendor_name, libraries in vendor_dict.items():
-                vendor_item = QTreeWidgetItem(self.component_list)
-                vendor_item.setText(0, vendor_name)
-                
-                for library_name, components in libraries.items():
-                    library_item = QTreeWidgetItem(vendor_item)
-                    library_item.setText(0, library_name)
-                    
-                    for i, component in components:
-                        component_name = component.get('name', '未知组件')
-                        version = component.get('version', '1.0')
-                        component_item = QTreeWidgetItem(library_item)
-                        component_item.setText(0, f"{component_name}_{version}")
-                        component_item.setData(0, Qt.UserRole, i)
+            # 更新component_list
+            self.update_component_list()
             
-            # 默认展开所有层级
-            self.component_list.expandAll()
-            
-            print(f"成功加载Library库，共解析 {len(self.components)} 个components")
         except Exception as e:
             print(f"加载Library库失败: {e}")
     
+    def load_library_from_directory(self, library_dir):
+        """从指定目录加载Library库（兼容旧接口）"""
+        self.load_library_from_directories([library_dir])
+
     def create_menu_bar(self):
         menu_bar = QMenuBar(self)
         self.setMenuBar(menu_bar)
@@ -800,11 +877,6 @@ class IPXactVisualizer(QMainWindow):
             QMessageBox.warning(self, "警告", "Version不能为空")
             return
         
-        # 检查library_directory是否已经设置
-        if not hasattr(self, 'library_directory') or not self.library_directory:
-            QMessageBox.warning(self, "警告", "请先在Library配置中选择IP library目录")
-            return
-        
         # 生成XML文件路径，使用name_version.xml格式，保存到IP子目录
         xml_filename = f"{name}_{version}.xml"
         ip_dir = os.path.join(self.library_directory, "IP")
@@ -820,6 +892,8 @@ class IPXactVisualizer(QMainWindow):
         
         # 创建component数据
         component = component_data
+        # 记录XML文件路径（用于后续删除）
+        component['xml_file_path'] = xml_file_path
         
         # 添加到components列表
         self.components.append(component)
@@ -852,65 +926,32 @@ class IPXactVisualizer(QMainWindow):
             # 构建name_version格式的节点名称
             node_name = f"{component_name}_{version}"
             
-            # 注册节点类型
-            # 使用闭包捕获当前的component和node_name值
-            def create_node_init(component, node_name):
-                def node_init(self):
-                    super(type(self), self).__init__()
-                    
-                    # 设置节点名称
-                    self.set_name(node_name)
-                    
-                    # 存储component数据
-                    self.component_data = component
-                    
-                    # 打印component数据，看看是否包含inout端口
-                    print(f"Component数据: {component}")
-                    print(f"Component端口: {component.get('ports', [])}")
-                    
-                    # 根据component的ports创建输入和输出端口
-                    for port in component.get('ports', []):
-                        port_name = port.get('name', 'Unknown')
-                        direction = port.get('direction', 'input')
-                        print(f"端口: {port_name}, 方向: {direction}")
-                        
-                        if direction == 'input' or direction == 'inout':
-                            # input和inout端口都添加为输入
-                            print(f"添加输入端口: {port_name}")
-                            self.add_input(port_name)
-                        if direction == 'output' or direction == 'inout':
-                            # output和inout端口都添加为输出
-                            print(f"添加输出端口: {port_name}")
-                            self.add_output(port_name)
-                return node_init
+            # 确保 vendor 和 library 键存在（提前初始化）
+            if vendor not in vendor_dict:
+                vendor_dict[vendor] = {}
+            if library not in vendor_dict[vendor]:
+                vendor_dict[vendor][library] = []
             
             try:
                 # 使用type创建动态类
                 node_class_name = f'{node_name}_node'
-                DynamicComponentNode = type(
-                    node_class_name,
-                    (BaseNode,),
-                    {
-                        '__identifier__': 'user',
-                        'NODE_NAME': node_class_name,  # 使用完整的类名作为NODE_NAME
-                        '__init__': create_node_init(component, node_name)
-                    }
-                )
                 
-                # 注册节点类型，覆盖已有的注册
+                # 检查节点类型是否已经注册过
+                node_identifier = f"user.{node_class_name}"
+                if node_identifier in self.graph.registered_nodes():
+                    # 已注册，跳过
+                    vendor_dict[vendor][library].append((i, component))
+                    continue
+                
+                # 使用统一的make_template_node函数创建节点类
+                DynamicComponentNode = make_template_node(None, node_name, component)
+                
+                # 注册节点类型
                 self.graph.register_node(DynamicComponentNode)
-                print(f"注册节点类型: {node_class_name}, 标识符: user.{node_class_name}")
-                print(f"当前注册的节点类型: {self.graph.registered_nodes()}")
             except Exception as e:
                 print(f"注册节点类型 {component_name} 失败: {e}")
             
-            # 构建vendor -> library -> component结构
-            if vendor not in vendor_dict:
-                vendor_dict[vendor] = {}
-            
-            if library not in vendor_dict[vendor]:
-                vendor_dict[vendor][library] = []
-            
+            # 添加到vendor_dict结构
             vendor_dict[vendor][library].append((i, component))
         
         # 添加到component_list
@@ -938,6 +979,18 @@ class IPXactVisualizer(QMainWindow):
             self, "打开IP-XACT文件", "", "XML Files (*.xml);;All Files (*)"
         )
         if file_path:
+            # 检查文件是否在 library/IP 目录下
+            if hasattr(self, 'library_directory') and self.library_directory:
+                ip_dir = os.path.join(self.library_directory, "IP")
+                # 获取文件的绝对路径
+                abs_file_path = os.path.abspath(file_path)
+                abs_ip_dir = os.path.abspath(ip_dir)
+                
+                # 检查文件是否在 IP 目录下
+                if not abs_file_path.startswith(abs_ip_dir + os.sep) and abs_file_path != abs_ip_dir:
+                    QMessageBox.warning(self, "警告", f"只能打开 {ip_dir} 目录下的XML文件")
+                    return
+            
             try:
                 #print(f"打开文件: {file_path}")
                 # 解析IP-XACT文件
@@ -965,9 +1018,12 @@ class IPXactVisualizer(QMainWindow):
                     vendor_dict[vendor][library].append((i, component))
                     
                     try:
-                        TemplateClass = make_template_node(None, f"{component_name}_{version}", node_data=component)
-                        ## 注册节点类型
-                        self.graph.register_node(TemplateClass)
+                        # 检查节点类型是否已经注册过
+                        node_identifier = f"user.{component_name}_{version}_node"
+                        if node_identifier not in self.graph.registered_nodes():
+                            TemplateClass = make_template_node(None, f"{component_name}_{version}", node_data=component)
+                            # 注册节点类型
+                            self.graph.register_node(TemplateClass)
                     except Exception as e:
                         print(f"注册节点失败: {e}")
                 
@@ -990,11 +1046,6 @@ class IPXactVisualizer(QMainWindow):
                 # 默认展开所有层级
                 self.component_list.expandAll()
                 
-                # 清空详细信息
-                self.details_panel.clear()
-                
-                # 显示成功消息
-                #QMessageBox.information(self, "成功", f"成功解析文件: {file_path}")
             except Exception as e:
                 # 显示错误消息
                 QMessageBox.critical(self, "错误", f"解析文件时出错: {str(e)}")
@@ -1006,11 +1057,9 @@ class IPXactVisualizer(QMainWindow):
         # 检查是component项还是保存的graph项
         # 通过检查index是否在components范围内来判断
         if 0 <= index < len(self.components):
-            # 是component项
-            component = self.components[index]
-            # 显示详细信息
-            details = self.parser.get_component_details(component)
-            self.details_panel.setText(details)
+            # 是component项 - 不再显示详细信息到details_panel
+            # 保持选中状态供后续拖拽使用
+            pass
     
     def on_project_selected(self, item, column):
         # 获取选中的项索引
@@ -1044,13 +1093,9 @@ class IPXactVisualizer(QMainWindow):
                     self.component_drag_count = graph_data['component_drag_count']
                 
                 self.graph.deserialize_session(graph_data)
-                print(f"加载graph: {graph_name}")
-                QMessageBox.information(self, "成功", f"成功加载graph: {graph_name}")
             else:
-                print(f"加载空graph: {graph_name}")
                 QMessageBox.information(self, "提示", f"加载空graph: {graph_name}")
         except Exception as e:
-            print(f"加载graph时出错: {e}")
             QMessageBox.critical(self, "错误", f"加载graph时出错: {str(e)}")
     
     def on_project_context_menu(self, position):
@@ -1262,7 +1307,6 @@ class IPXactVisualizer(QMainWindow):
             if os.path.exists(file_path):
                 try:
                     os.remove(file_path)
-                    print(f"删除文件: {file_path}")
                 except Exception as e:
                     print(f"删除文件失败: {e}")
             
@@ -1335,7 +1379,6 @@ class IPXactVisualizer(QMainWindow):
                 if os.path.exists(file_path):
                     try:
                         os.remove(file_path)
-                        print(f"删除文件: {file_path}")
                     except Exception as e:
                         print(f"删除文件失败: {e}")
             
@@ -1381,7 +1424,7 @@ class IPXactVisualizer(QMainWindow):
     def add_component_to_workspace(self, component_index, pos):
         # 检查是否有选中的project
         if self.current_project_index == -1:
-            QMessageBox.warning(self, "警告", "请先在Project面板中选择一个Graph项")
+            QMessageBox.warning(self, "警告", "请先在Project面板中选择一个Project")
             return
         
         # 将component添加到工作区
@@ -1410,10 +1453,6 @@ class IPXactVisualizer(QMainWindow):
                     self.component_data = component
                     
                     # 打印component数据
-                    print(f"添加Component数据: {component}")
-                    print(f"添加Component端口: {component.get('ports', [])}")
-                    print(f"添加Component bus interfaces: {component.get('bus_interfaces', [])}")
-                    print(f"添加Component port maps: {component.get('port_maps', [])}")
                     
                     # 构建端口映射
                     port_directions = {}
@@ -1425,7 +1464,6 @@ class IPXactVisualizer(QMainWindow):
                         if physical_port:
                             mapped_physical_ports.add(physical_port)
                     
-                    print(f"已映射的physical ports: {mapped_physical_ports}")
                     
                     # 首先添加port表中的端口，但排除已经被映射的port
                     for port in component.get('ports', []):
@@ -1445,24 +1483,22 @@ class IPXactVisualizer(QMainWindow):
                         elif mode == 'slave':
                             port_directions[bus_name] = 'input'
                     
-                    print(f"端口方向映射: {port_directions}")
                     
                     # 根据端口映射创建输入和输出端口
                     for port_name, direction in port_directions.items():
                         if direction == 'input' or direction == 'inout':
                             # input和inout端口都添加为输入
-                            print(f"添加输入端口: {port_name}")
                             self.add_input(port_name)
                         if direction == 'output' or direction == 'inout':
                             # output和inout端口都添加为输出
-                            print(f"添加输出端口: {port_name}")
                             self.add_output(port_name)
             
             try:
-                # 注册节点类型，覆盖已有的注册
-                self.graph.register_node(DynamicComponentNode)
-                print(f"注册节点类型: {node_class_name}, 标识符: user.{node_class_name}")
-                print(f"当前注册的节点类型: {self.graph.registered_nodes()}")
+                # 检查节点类型是否已经注册过
+                node_identifier = f"user.{node_class_name}"
+                if node_identifier not in self.graph.registered_nodes():
+                    # 注册节点类型
+                    self.graph.register_node(DynamicComponentNode)
             except Exception as e:
                 print(f"注册节点类型 {component_name} 失败: {e}")
             
@@ -1473,24 +1509,20 @@ class IPXactVisualizer(QMainWindow):
             # 生成唯一的节点名称
             unique_name = f"u_{component_name}_v{version}_{self.component_drag_count[node_name]}"
             
+            # 显示添加消息（使用print，会自动追加到details_panel）
             print(f"添加component: {unique_name} 到工作区")
-            self.details_panel.setText(f"添加component: {unique_name} 到工作区")
             
             # 从0开始计数
             self.component_drag_count[node_name] += 1
 
             # 使用正确的节点类型标识符创建节点
             # 格式：{__identifier__}.{NODE_NAME}
-            print(f"创建节点，类型标识符: user.{node_name}_node")
             
             node = self.graph.create_node(
                 f'user.{node_name}_node',
                 name=unique_name,
                 pos=pos
             )
-            print(f"创建节点成功: {node}")
-            print(f"节点输入端口: {node.inputs()}")
-            print(f"节点输出端口: {node.outputs()}")
             self.component_items.append(node)
     
     def update_component_node(self, component_index, component_data):
@@ -1519,10 +1551,6 @@ class IPXactVisualizer(QMainWindow):
                     self.component_data = component_data
                     
                     # 打印component数据
-                    print(f"更新Component数据: {component_data}")
-                    print(f"更新Component端口: {component_data.get('ports', [])}")
-                    print(f"更新Component bus interfaces: {component_data.get('bus_interfaces', [])}")
-                    print(f"更新Component port maps: {component_data.get('port_maps', [])}")
                     
                     # 构建端口映射
                     port_directions = {}
@@ -1534,7 +1562,6 @@ class IPXactVisualizer(QMainWindow):
                         if physical_port:
                             mapped_physical_ports.add(physical_port)
                     
-                    print(f"已映射的physical ports: {mapped_physical_ports}")
                     
                     # 首先添加port表中的端口，但排除已经被映射的port
                     for port in component_data.get('ports', []):
@@ -1554,24 +1581,22 @@ class IPXactVisualizer(QMainWindow):
                         elif mode == 'slave':
                             port_directions[bus_name] = 'input'
                     
-                    print(f"端口方向映射: {port_directions}")
                     
                     # 根据端口映射创建输入和输出端口
                     for port_name, direction in port_directions.items():
                         if direction == 'input' or direction == 'inout':
                             # input和inout端口都添加为输入
-                            print(f"添加输入端口: {port_name}")
                             self.add_input(port_name)
                         if direction == 'output' or direction == 'inout':
                             # output和inout端口都添加为输出
-                            print(f"添加输出端口: {port_name}")
                             self.add_output(port_name)
             
             try:
-                # 注册节点类型，覆盖已有的注册
-                self.graph.register_node(DynamicComponentNode)
-                print(f"更新节点类型: {node_class_name}, 标识符: user.{node_class_name}")
-                print(f"当前注册的节点类型: {self.graph.registered_nodes()}")
+                # 检查节点类型是否已经注册过
+                node_identifier = f"user.{node_class_name}"
+                if node_identifier not in self.graph.registered_nodes():
+                    # 注册节点类型
+                    self.graph.register_node(DynamicComponentNode)
             except Exception as e:
                 print(f"注册节点类型 {component_name} 失败: {e}")
             
@@ -1584,7 +1609,6 @@ class IPXactVisualizer(QMainWindow):
                     if node_component_name == component_name and node_component_version == component_data.get('version', '1.0'):
                         # 更新节点的数据
                         node.component_data = component_data
-                        print(f"更新节点: {node.name()}")
                         
                         # 这里可以添加更新节点端口的逻辑
                         # 注意：具体的端口更新方法取决于您使用的图形库
@@ -1618,84 +1642,207 @@ class IPXactVisualizer(QMainWindow):
         # 更新连线关系列表
         src_node = output_port.node().name()
         dst_node = input_port.node().name()
-        print(f"更新连线关系: {src_node}.{output_port.name()} -> {dst_node}.{input_port.name()}")
-        #connection = {"source_node": src_node, 
-        #              "target_node": dst_node, 
-        #              "source_port": output_port.name(), 
-        #              "target_port": input_port.name()}
+        src_port_name = output_port.name()
+        dst_port_name = input_port.name()
 
-        #self.connections.append(connection)
-        print("更新连线关系")
+        # 进行位宽验证
+        src_node_obj = None
+        dst_node_obj = None
+        for node in self.graph.all_nodes():
+            if node.name() == src_node:
+                src_node_obj = node
+            if node.name() == dst_node:
+                dst_node_obj = node
+
+        if src_node_obj and dst_node_obj:
+            # 调用验证方法（source是output_port，target是input_port）
+            valid, error_msg = self.validate_port_connection(
+                src_node_obj, src_port_name,
+                dst_node_obj, dst_port_name
+            )
+
+            if not valid:
+                # 验证失败，断开连接
+                output_port.disconnect_from(input_port)
+                QMessageBox.warning(self, "位宽验证失败", error_msg)
+
+    def get_node_component_data(self, node):
+        """获取节点的 component_data"""
+        if hasattr(node, 'component_data') and node.component_data:
+            return node.component_data
+        elif hasattr(node, 'node_data') and node.node_data:
+            return node.node_data
+        return {}
+
+    def get_port_width(self, node, port_name):
+        """获取端口的位宽"""
+        component_data = self.get_node_component_data(node)
+        ports = component_data.get('ports', [])
+
+        for port in ports:
+            if port.get('name') == port_name:
+                width = port.get('width', 1)
+                if isinstance(width, str):
+                    try:
+                        return eval(width) if width else 1
+                    except:
+                        return 1
+                return int(width) if width else 1
+        return 1
+
+    def is_bus_interface_port(self, node, port_name):
+        """判断端口是否是 bus interface 端口"""
+        component_data = self.get_node_component_data(node)
+        bus_interfaces = component_data.get('bus_interfaces', [])
+
+        if not bus_interfaces:
+            return (False, None)
+
+        for bus_if in bus_interfaces:
+            bus_if_name = bus_if.get('name', '')
+            if bus_if_name == port_name or f"bus_{bus_if_name}" == port_name:
+                return (True, bus_if_name)
+
+        return (False, None)
+
+    def get_bus_interface_signals(self, node, bus_if_name):
+        """获取 bus interface 内部的信号及其位宽映射"""
+        component_data = self.get_node_component_data(node)
+        bus_interfaces = component_data.get('bus_interfaces', [])
+        ports = component_data.get('ports', [])
+
+        port_width_map = {}
+        for port in ports:
+            port_name = port.get('name', '')
+            width = port.get('width', 1)
+            if isinstance(width, str):
+                try:
+                    width = eval(width) if width else 1
+                except:
+                    width = 1
+            port_width_map[port_name] = int(width) if width else 1
+
+        signal_widths = {}
+        for bus_if in bus_interfaces:
+            if bus_if.get('name') == bus_if_name:
+                port_maps = bus_if.get('port_maps', [])
+                for pm in port_maps:
+                    logical_port = pm.get('logical_port', '')
+                    physical_port = pm.get('physical_port', '')
+                    if logical_port and physical_port and physical_port in port_width_map:
+                        signal_widths[logical_port] = port_width_map[physical_port]
+                    elif logical_port:
+                        signal_widths[logical_port] = 1
+        return signal_widths
+
+    def get_bus_interface_type(self, node, bus_if_name):
+        """获取 bus interface 的 bus_type"""
+        component_data = self.get_node_component_data(node)
+        bus_interfaces = component_data.get('bus_interfaces', [])
+
+        for bus_if in bus_interfaces:
+            if bus_if.get('name') == bus_if_name:
+                return bus_if.get('bus_type', '')
+
+        return ''
+
+    def validate_port_connection(self, source_node, source_port_name, target_node, target_port_name):
+        """
+        验证两个端口的位宽是否匹配
+        Returns: (bool, str) - (是否有效, 错误信息)
+        """
+        source_is_bus, source_bus_name = self.is_bus_interface_port(source_node, source_port_name)
+        target_is_bus, target_bus_name = self.is_bus_interface_port(target_node, target_port_name)
+
+        if source_is_bus and target_is_bus:
+            source_bus_type = self.get_bus_interface_type(source_node, source_bus_name)
+            target_bus_type = self.get_bus_interface_type(target_node, target_bus_name)
+
+            if source_bus_type != target_bus_type:
+                return (False, f"bus type 不匹配: {source_bus_type} vs {target_bus_type}")
+
+            source_signals = self.get_bus_interface_signals(source_node, source_bus_name)
+            target_signals = self.get_bus_interface_signals(target_node, target_bus_name)
+
+            if set(source_signals.keys()) != set(target_signals.keys()):
+                missing_in_source = set(target_signals.keys()) - set(source_signals.keys())
+                missing_in_target = set(source_signals.keys()) - set(target_signals.keys())
+                error_msg = "bus interface 内部信号名称不匹配"
+                if missing_in_source:
+                    error_msg += f"\n目标有但源缺少的信号: {missing_in_source}"
+                if missing_in_target:
+                    error_msg += f"\n源有但目标缺少的信号: {missing_in_target}"
+                return (False, error_msg)
+
+            for signalName in source_signals:
+                src_width = source_signals.get(signalName, 0)
+                tgt_width = target_signals.get(signalName, 0)
+                if src_width != tgt_width:
+                    return (False, f"信号 '{signalName}' 位宽不匹配: 源 {src_width} 位 vs 目标 {tgt_width} 位")
+
+            return (True, "")
+
+        elif source_is_bus or target_is_bus:
+            bus_node = source_node if source_is_bus else target_node
+            bus_port_name = source_port_name if source_is_bus else target_port_name
+            normal_node = target_node if source_is_bus else source_node
+            normal_port_name = target_port_name if source_is_bus else source_port_name
+
+            bus_if_name = bus_port_name
+            if bus_if_name.startswith('bus_'):
+                bus_if_name = bus_if_name[4:]
+
+            bus_signals = self.get_bus_interface_signals(bus_node, bus_if_name)
+
+            if not bus_signals:
+                return (True, "")
+
+            if len(bus_signals) > 1:
+                return (False, f"bus interface 包含多个信号 ({list(bus_signals.keys())})，无法直接连接到单个端口")
+
+            signal_name = list(bus_signals.keys())[0]
+            bus_width = bus_signals[signal_name]
+            normal_width = self.get_port_width(normal_node, normal_port_name)
+
+            if bus_width != normal_width:
+                return (False, f"位宽不匹配: bus interface 信号 '{signal_name}' 宽度 {bus_width} 位 vs 端口 '{normal_port_name}' 宽度 {normal_width} 位")
+
+            return (True, "")
+
+        else:
+            source_width = self.get_port_width(source_node, source_port_name)
+            target_width = self.get_port_width(target_node, target_port_name)
+
+            if source_width != target_width:
+                return (False, f"位宽不匹配: 源端口 '{source_port_name}' 宽度 {source_width} 位 vs 目标端口 '{target_port_name}' 宽度 {target_width} 位")
+
+            return (True, "")
     
     def open_library_config(self):
         # 打开Library库配置对话框
-        dialog = LibraryConfigDialog(self, self.library_directory)
+        # 获取当前的library目录列表（兼容旧格式）
+        current_dirs = getattr(self, 'library_directories', [])
+        if not current_dirs and hasattr(self, 'library_directory') and self.library_directory:
+            current_dirs = [self.library_directory]
+        
+        dialog = LibraryConfigDialog(self, current_dirs)
         if dialog.exec_() == QDialog.Accepted:
-            # 获取选定的目录
-            library_dir = dialog.get_selected_directory()
-            if library_dir:
+            # 获取选定的目录列表
+            library_dirs = dialog.get_selected_directories()
+            if library_dirs:
                 # 存储选定的库目录位置
-                self.library_directory = library_dir
-                print(f"选定Library库目录: {library_dir}")
+                self.library_directories = library_dirs
                 
-                # 保存配置到文件
-                config = {"library_directory": library_dir}
+                # 保存配置到文件（使用新格式）
+                config = {"library_directories": library_dirs}
                 if save_config(config):
                     print(f"配置已保存到: {get_config_path()}")
                 else:
                     print("保存配置失败")
                 
-                # 检索目录下的XML文件
-                try:
-                    import glob
-                    # 从IP子目录读取XML文件
-                    ip_dir = os.path.join(library_dir, "IP")
-                    if os.path.exists(ip_dir):
-                        xml_files = glob.glob(os.path.join(ip_dir, "*.xml"))
-                    else:
-                        # 如果IP子目录不存在，尝试从根目录读取（兼容旧版本）
-                        xml_files = glob.glob(os.path.join(library_dir, "*.xml"))
-                    print(f"找到 {len(xml_files)} 个XML文件")
-                    
-                    # 清空现有的components列表
-                    self.components = []
-                    
-                    # 解析每个XML文件
-                    for xml_file in xml_files:
-                        try:
-                            components = self.parser.parse_file(xml_file)
-                            self.components.extend(components)
-                            print(f"解析文件: {xml_file}, 找到 {len(components)} 个components")
-                        except Exception as e:
-                            print(f"解析文件 {xml_file} 时出错: {e}")
-                    
-                    # 清空component_list并添加解析结果
-                    self.component_list.clear()
-                    for i, component in enumerate(self.components):
-                        component_name = component.get('name', '未知组件')
-                        component_version = component.get('version', '未知组件').replace('.', '_')
-                        
-                        # 检查节点类型是否已经注册过
-                        node_identifier = f"user.{component_name}_{component_version}_node"
-                        if node_identifier in self.graph.registered_nodes():
-                            QMessageBox.warning(self, "警告", f"节点类型 '{component_name}' 已经注册过，跳过'{xml_file}'的解析")
-                            continue
-                        
-                        try:
-                            TemplateClass = make_template_node(None, f"{component_name}_{component_version}", node_data=component)
-                            # 注册节点类型
-                            self.graph.register_node(TemplateClass)
-                        except Exception as e:
-                            print(f"注册节点失败: {e}")
-                    
-                    # 更新component_list
-                    self.update_component_list()
-                    
-                    QMessageBox.information(self, "成功", f"成功加载Library库，共解析 {len(self.components)} 个components")
-                except Exception as e:
-                    print(f"检索XML文件时出错: {e}")
-                    QMessageBox.critical(self, "错误", f"检索XML文件时出错: {str(e)}")
-    
+                # 加载所有Library库
+                self.load_library_from_directories(library_dirs)
+
     def save_file(self):
         graph_name, graph_data = self.saved_graphs[self.current_project_index]
         # 保存文件对话框
@@ -1704,19 +1851,15 @@ class IPXactVisualizer(QMainWindow):
         )
         if file_path:
             try:
-                print(f"保存文件: {file_path}")
                 
                 # 获取当前graph上的所有连接关系
                 connections = get_all_connections(self.graph)
-                print(connections)
                 
                 # 写回IP-XACT文件
                 success = self.writer.write_file(file_path, graph_name, connections)
                 if success:
-                    print("保存成功！")
                     QMessageBox.information(self, "成功", f"成功保存文件: {file_path}")
                 else:
-                    print("保存失败！")
                     QMessageBox.warning(self, "警告", "保存文件失败，请检查日志")
             except Exception as e:
                 # 显示错误消息
@@ -1891,10 +2034,8 @@ class IPXactVisualizer(QMainWindow):
             self.project_panel.setCurrentItem(module_item)
             self.current_project_index = len(self.saved_graphs) - 1
             
-            print(f"创建graph: {full_module_name}")
             QMessageBox.information(self, "成功", f"成功创建graph: {full_module_name}")
         except Exception as e:
-            print(f"创建graph时出错: {e}")
             QMessageBox.critical(self, "错误", f"创建graph时出错: {str(e)}")
     
     def save_current_graph(self):
@@ -1949,10 +2090,8 @@ class IPXactVisualizer(QMainWindow):
             if verilog_file:
                 self.generate_verilog_code(verilog_file, graph_data)
             
-            print(f"保存graph: {graph_name}")
             QMessageBox.information(self, "成功", f"成功保存graph: {graph_name}")
         except Exception as e:
-            print(f"保存graph时出错: {e}")
             QMessageBox.critical(self, "错误", f"保存graph时出错: {str(e)}")
     
     def save_graph_to_file(self, graph_name, graph_data):
@@ -1976,7 +2115,6 @@ class IPXactVisualizer(QMainWindow):
                     "data": graph_data
                 }, f, ensure_ascii=False, indent=4)
             
-            print(f"Graph数据已保存到: {file_path}")
             return True
         except Exception as e:
             print(f"保存graph数据到文件失败: {e}")
@@ -2025,7 +2163,6 @@ class IPXactVisualizer(QMainWindow):
             # 遍历节点，收集端口信息
             for node_id, node_data in nodes.items():
                 node_type = node_data.get('type_', '')
-                print(f"节点类型: {node_type}")
 
                 # 处理CircleNodeIn（输入端口）
                 if node_type == 'user.circle.CircleNodeIn':
@@ -2196,9 +2333,7 @@ class IPXactVisualizer(QMainWindow):
             with open(verilog_file, 'w', encoding='utf-8') as f:
                 f.write(verilog_code)
             
-            print(f"Verilog代码已生成到: {verilog_file}")
         except Exception as e:
-            print(f"生成Verilog代码时出错: {e}")
             import traceback
             traceback.print_exc()
     
@@ -2214,7 +2349,6 @@ class IPXactVisualizer(QMainWindow):
             
             # 获取所有json文件
             json_files = glob.glob(os.path.join(projects_dir, "*.json"))
-            print(f"找到 {len(json_files)} 个graph文件")
             
             # 清空现有的saved_graphs和project_panel
             self.saved_graphs = []
@@ -2284,16 +2418,45 @@ class IPXactVisualizer(QMainWindow):
                         module_item.setText(0, graph_name)
                         module_item.setData(0, Qt.UserRole, len(self.saved_graphs) - 1)  # 存储索引
                         
-                        print(f"加载graph: {graph_name}")
                 except Exception as e:
                     print(f"加载graph文件 {json_file} 失败: {e}")
             
             # 展开所有层级
             self.project_panel.expandAll()
             
-            print(f"成功加载 {len(self.saved_graphs)} 个graphs")
         except Exception as e:
             print(f"加载graphs失败: {e}")
+    
+    def append_to_details_panel(self, text):
+        """将文本追加到terminal（保留所有内容）"""
+        self.terminal.write_output(text)
+    
+    def save_log_to_file(self, content):
+        """将日志内容追加到日志文件"""
+        try:
+            with open(self.log_file_path, 'a', encoding='utf-8') as f:
+                # 添加分隔线和时间戳
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                f.write(f"\n{'='*60}\n")
+                f.write(f"日志保存时间: {timestamp}\n")
+                f.write(f"{'='*60}\n")
+                f.write(content)
+                f.write("\n")
+            print(f"日志已保存到: {self.log_file_path}")
+        except Exception as e:
+            # 恢复原始stdout打印错误
+            original = sys.stdout
+            sys.stdout = self.original_stdout
+            print(f"保存日志失败: {e}")
+            sys.stdout = original
+    
+    def closeEvent(self, event):
+        """关闭窗口时保存剩余日志"""
+        # 恢复原始stdout
+        sys.stdout = self.original_stdout
+        
+        # 调用父类的closeEvent
+        super().closeEvent(event)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

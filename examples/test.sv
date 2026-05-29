@@ -45,12 +45,6 @@ module test_module #(
     // 字节使能（向量，使用宏）
     input  logic [`BYTE_EN_WIDTH-1:0] byte_en,
 
-    // 数组端口（非打包数组）
-    input  logic [3:0]               fifo_data [0:7],   // 8个4bit元素
-
-    // 二维打包数组端口
-    input  logic [1:0][3:0]          packed_2d,         // 2×4 bit
-
     // 使用参数化位宽的端口
     input  logic [P_DATA_WIDTH-1:0]  param_data_in,
     output logic [P_DATA_WIDTH-1:0]  param_data_out,

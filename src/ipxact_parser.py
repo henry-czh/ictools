@@ -36,7 +36,9 @@ class IPXactParser:
                     'version': '',
                     'ports': [],
                     'parameters': [],
-                    'defines': []
+                    'defines': [],
+                    'bus_interfaces': [],
+                    'port_maps': []
                 }
                 
                 # 提取component名称
@@ -84,7 +86,6 @@ class IPXactParser:
                     direction_elem = port_elem.find('.//ipxact:direction', namespaces=ns)
                     if direction_elem is not None:
                         port['direction'] = direction_elem.text
-                        print(f"解析到端口: {port['name']}, 方向: {port['direction']}")
                     else:
                         print(f"未找到端口 {port['name']} 的方向")
                     
@@ -149,6 +150,59 @@ class IPXactParser:
                     
                     component['defines'].append(local_param)
                 
+                # 提取busInterfaces
+                bus_interfaces = component_elem.findall('.//ipxact:busInterface', namespaces=ns)
+                for bus_interface_elem in bus_interfaces:
+                    bus_interface = {
+                        'name': '',
+                        'bus_type': '',
+                        'mode': 'master',
+                        'port_maps': []
+                    }
+
+                    # 提取bus interface名称
+                    bus_name_elem = bus_interface_elem.find('.//ipxact:name', namespaces=ns)
+                    if bus_name_elem is not None:
+                        bus_interface['name'] = bus_name_elem.text
+
+                    # 提取bus type
+                    bus_type_elem = bus_interface_elem.find('.//ipxact:busType', namespaces=ns)
+                    if bus_type_elem is not None:
+                        bus_type_name_elem = bus_type_elem.find('.//ipxact:name', namespaces=ns)
+                        if bus_type_name_elem is not None:
+                            bus_interface['bus_type'] = bus_type_name_elem.text
+
+                    # 提取mode（master/slave）
+                    mode_elem = bus_interface_elem.find('.//ipxact:mode', namespaces=ns)
+                    if mode_elem is not None:
+                        bus_interface['mode'] = mode_elem.text
+
+                    # 提取该bus interface下的portMaps
+                    port_maps_elem = bus_interface_elem.find('.//ipxact:portMaps', namespaces=ns)
+                    if port_maps_elem is not None:
+                        port_map_elems = port_maps_elem.findall('.//ipxact:portMap', namespaces=ns)
+                        for port_map_elem in port_map_elems:
+                            port_map = {
+                                'logical_port': '',
+                                'physical_port': '',
+                                'bus_interface': bus_interface['name']
+                            }
+
+                            # 提取logicalPort
+                            logical_port_elem = port_map_elem.find('.//ipxact:logicalPort', namespaces=ns)
+                            if logical_port_elem is not None:
+                                port_map['logical_port'] = logical_port_elem.text
+
+                            # 提取physicalPort
+                            physical_port_elem = port_map_elem.find('.//ipxact:physicalPort', namespaces=ns)
+                            if physical_port_elem is not None:
+                                port_map['physical_port'] = physical_port_elem.text
+
+                            bus_interface['port_maps'].append(port_map)
+                            component['port_maps'].append(port_map)
+
+                    component['bus_interfaces'].append(bus_interface)
+
                 # 提取fileSets（SystemVerilog文件路径）
                 sv_file = ''
                 file_sets = component_elem.find('.//ipxact:fileSets', namespaces=ns)
@@ -211,7 +265,6 @@ class IPXactParser:
     
     def parse_abstract_file(self, file_path, signal, mode):
         """解析abstract文件，提取port方向和位宽信息"""
-        print(f"解析abstract文件: {file_path}, 信号: {signal}, 模式: {mode}")
         # 定义命名空间
         ns = {'http://www.accellera.org/XMLSchema/IPXACT/1685-2014'}
         # 如果signal为None，返回所有信号的列表
@@ -254,23 +307,16 @@ class IPXactParser:
                 # 查找与当前信号匹配的port
                 for port_elem in root.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}port'):
                     for logical_name_elem in port_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}logicalName'):
-                        print(f"找到端口: {logical_name_elem.text}")
                         if logical_name_elem.text == signal:
-                            print(f"匹配到信号: {signal}")
                             # 读取port方向
                             for wire_elem in port_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}wire'):
-                                print("找到wire元素")
                                 if mode == "master":
                                     for on_master_elem in wire_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}onMaster'):
-                                        print("找到onMaster元素")
                                         for direction_elem in on_master_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}direction'):
-                                            print(f"找到方向: {direction_elem.text}")
                                             port_direction = direction_elem.text
                                 elif mode == "slave":
                                     for on_slave_elem in wire_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}onSlave'):
-                                        print("找到onSlave元素")
                                         for direction_elem in on_slave_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}direction'):
-                                            print(f"找到方向: {direction_elem.text}")
                                             port_direction = direction_elem.text
             
             # 尝试从bus definition文件中读取port位宽和方向
@@ -278,21 +324,17 @@ class IPXactParser:
             bus_ref_found = False
             for bus_ref_elem in root.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}busRef'):
                 bus_ref_found = True
-                print(f"bus_ref_elem: {bus_ref_elem}")
                 vendor = bus_ref_elem.get("vendor")
                 library = bus_ref_elem.get("library")
                 name = bus_ref_elem.get("name")
                 version = bus_ref_elem.get("version")
-                print(f"busRef信息: vendor={vendor}, library={library}, name={name}, version={version}")
                 
                 # 构建bus definition文件路径
                 busdef_dir = os.path.join(os.path.dirname(file_path), "..", "busdef")
                 busdef_file_name = f"{name}_{version}.xml"
                 busdef_file_path = os.path.join(busdef_dir, busdef_file_name)
-                print(f"bus definition文件路径: {busdef_file_path}")
                 
                 if os.path.exists(busdef_file_path):
-                    print(f"bus definition文件存在: {busdef_file_path}")
                     # 解析bus definition文件
                     bus_tree = ET.parse(busdef_file_path)
                     bus_root = bus_tree.getroot()
@@ -300,49 +342,37 @@ class IPXactParser:
                     # 查找与当前信号匹配的signalDefinition
                     for signal_def_elem in bus_root.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}signalDefinition'):
                         for signal_name_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name'):
-                            print(f"找到signalDefinition: {signal_name_elem.text}")
                             if signal_name_elem.text == signal:
-                                print(f"匹配到信号: {signal}")
                                 # 读取port位宽
                                 for width_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}width'):
-                                    print(f"找到位宽: {width_elem.text}")
                                     port_width = width_elem.text
                                 # 如果还没有获取到方向，从bus definition文件中获取
                                 if not port_direction:
                                     if mode == "master":
                                         for presence_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}presence'):
-                                            print(f"找到方向: {presence_elem.text}")
                                             port_direction = presence_elem.text
                                     elif mode == "slave":
                                         for driver_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}driver'):
-                                            print(f"找到方向: {driver_elem.text}")
                                             port_direction = driver_elem.text
                 else:
                     print(f"bus definition文件不存在: {busdef_file_path}")
             # 如果当前文件就是bus definition文件，直接从中获取信息
             if not bus_ref_found and 'busDefinition' in root.tag:
-                print("当前文件是bus definition文件")
                 # 查找与当前信号匹配的signalDefinition
                 for signal_def_elem in root.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}signalDefinition'):
                     for signal_name_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name'):
-                        print(f"找到signalDefinition: {signal_name_elem.text}")
                         if signal_name_elem.text == signal:
-                            print(f"匹配到信号: {signal}")
                             # 读取port位宽
                             for width_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}width'):
-                                print(f"找到位宽: {width_elem.text}")
                                 port_width = width_elem.text
                             # 读取port方向
                             if mode == "master":
                                 for presence_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}presence'):
-                                    print(f"找到方向: {presence_elem.text}")
                                     port_direction = presence_elem.text
                             elif mode == "slave":
                                 for driver_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}driver'):
-                                    print(f"找到方向: {driver_elem.text}")
                                     port_direction = driver_elem.text
             
-            print(f"解析到端口: {signal}, 方向: {port_direction}, 位宽: {port_width}")
         except Exception as e:
             print(f"从abstract文件中读取port信息时出错: {e}")
         

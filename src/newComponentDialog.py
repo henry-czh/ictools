@@ -1,5 +1,7 @@
 import xml.etree.ElementTree as ET
 import os
+import ast
+import operator
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QTableWidget, QHeaderView, QHBoxLayout, 
                     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QGroupBox, QLabel, QLineEdit, QGridLayout, QFileDialog, QMessageBox)
 from PyQt5.QtGui import QIcon
@@ -7,14 +9,107 @@ from PyQt5.QtCore import Qt
 from .ipxact_parser import IPXactParser
 from .ipxact_writer import IPXactWriter
 
+
 class NewComponentDialog(QDialog):
     """新建Component对话框"""
+    
+    def get_parameters_dict(self):
+        """获取所有parameter的名称和值的字典"""
+        params = {}
+        for i in range(self.parameter_table.rowCount()):
+            # 跳过添加按钮行
+            btn = self.parameter_table.cellWidget(i, 0)
+            if isinstance(btn, QPushButton):
+                continue
+            
+            # 获取parameter名称
+            param_name_item = self.parameter_table.item(i, 0)
+            if not param_name_item:
+                continue
+            param_name = param_name_item.text().strip()
+            if not param_name:
+                continue
+            
+            # 获取parameter默认值
+            param_default_item = self.parameter_table.item(i, 2)
+            param_value = param_default_item.text().strip() if param_default_item else ""
+            
+            # 如果值本身是表达式，尝试计算
+            if param_value:
+                try:
+                    # 先尝试直接转换为数字
+                    params[param_name] = int(param_value)
+                except ValueError:
+                    try:
+                        params[param_name] = float(param_value)
+                    except ValueError:
+                        # 如果无法转换，保留原始字符串
+                        params[param_name] = param_value
+        return params
+    
+    # 安全的公式计算函数
+    def safe_eval(self, expr, params=None):
+        """安全地计算数学公式，支持parameter替换和基本运算符"""
+        if not expr or not isinstance(expr, str):
+            return expr
+        
+        # 如果没有提供params，获取当前的parameter列表
+        if params is None:
+            params = self.get_parameters_dict()
+        
+        # 替换表达式中的parameter为对应的值
+        expr_with_params = expr
+        for param_name, param_value in params.items():
+            # 只替换独立的parameter名称（避免部分匹配）
+            import re
+            # 使用正则表达式匹配独立的变量名
+            pattern = r'\b' + re.escape(param_name) + r'\b'
+            expr_with_params = re.sub(pattern, str(param_value), expr_with_params)
+        
+        # 定义允许的操作符
+        allowed_ops = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.FloorDiv: operator.floordiv,
+            ast.Mod: operator.mod,
+            ast.Pow: operator.pow,
+            ast.USub: operator.neg,
+            ast.UAdd: operator.pos,
+        }
+        
+        # 安全的表达式评估函数
+        def eval_node(node):
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                return node.value
+            elif isinstance(node, ast.UnaryOp) and type(node.op) in allowed_ops:
+                return allowed_ops[type(node.op)](eval_node(node.operand))
+            elif isinstance(node, ast.BinOp) and type(node.op) in allowed_ops:
+                return allowed_ops[type(node.op)](eval_node(node.left), eval_node(node.right))
+            else:
+                # 如果表达式无法安全计算，返回原始值
+                return expr
+        
+        try:
+            # 解析表达式
+            parsed_expr = ast.parse(expr_with_params, mode='eval')
+            # 计算结果
+            result = eval_node(parsed_expr.body)
+            return str(result)
+        except Exception:
+            # 如果计算失败，返回原始值
+            return expr
     def __init__(self, parent=None, component_index=None):
         super().__init__(parent)
         self.setWindowTitle("新建Component")
         self.resize(800, 700)
         self.component_index = component_index
         self.edited_component_data = None
+        # 存储每个bus interface的port map信息
+        self.bus_interface_port_maps = {}
+        # 当前选中的bus interface行索引
+        self.current_bus_interface_row = None
         
         self.layout = QVBoxLayout(self)
         
@@ -181,6 +276,7 @@ class NewComponentDialog(QDialog):
         
         # 保存当前点击的bus_interface_table行索引
         bus_interface_row = row
+        self.current_bus_interface_row = row
         
         # 获取该行的bus_type
         bus_type_widget = self.bus_interface_table.cellWidget(row, 1)
@@ -200,21 +296,33 @@ class NewComponentDialog(QDialog):
         if not interface_name:
             return
         
-        # 从主窗口获取library库目录
-        if self.parent() and hasattr(self.parent(), 'library_directory'):
-            library_dir = self.parent().library_directory
-            busdef_dir = os.path.join(library_dir, "busdef")
-        else:
-            # 如果主窗口没有library_directory属性，使用默认路径
-            busdef_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "library", "busdef")
+        # 从主窗口获取library库目录列表
+        library_dirs = []
+        if self.parent():
+            if hasattr(self.parent(), 'library_directories'):
+                library_dirs = self.parent().library_directories
+            elif hasattr(self.parent(), 'library_directory'):
+                library_dir = self.parent().library_directory
+                if library_dir:
+                    library_dirs = [library_dir]
+        
+        if not library_dirs:
+            default_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "library")
+            if os.path.exists(default_dir):
+                library_dirs = [default_dir]
         
         # 创建IPXactParser实例
         parser = IPXactParser()
         
-        # 查找对应的总线定义文件
-        busdef_file = parser.find_bus_definition_file(bus_type, busdef_dir)
+        # 查找对应的总线定义文件（遍历所有library目录）
+        busdef_file = None
+        for library_dir in library_dirs:
+            busdef_dir = os.path.join(library_dir, "busdef")
+            busdef_file = parser.find_bus_definition_file(bus_type, busdef_dir)
+            if busdef_file:
+                break
+        
         if not busdef_file:
-            print(f"未找到总线定义文件: {bus_type}")
             return
         
         # 解析总线定义文件，提取port信息
@@ -223,22 +331,33 @@ class NewComponentDialog(QDialog):
             signals = parser.parse_abstract_file(busdef_file, None, None)
             
             if not signals:
-                print(f"总线定义文件 {bus_type} 中未找到信号")
+    
                 return
             
-            # 清空portmap表中与当前bus interface相关的行
-            rows_to_remove = []
-            for i in range(self.port_map_table.rowCount()):
-                # 检查bus interface列是否匹配
-                bus_interface_item = self.port_map_table.item(i, 4)
-                if bus_interface_item and bus_interface_item.text().strip() == interface_name:
-                    rows_to_remove.append(i)
+            # 从字典中获取该bus interface的port map信息（用于恢复）
+            saved_port_maps = self.bus_interface_port_maps.get(bus_interface_row, {})
             
-            # 从后往前删除行，避免索引混乱
-            for i in sorted(rows_to_remove, reverse=True):
-                self.port_map_table.removeRow(i)
+            # 清除所有portMap行（避免增量显示问题）
+            self.port_map_table.setRowCount(0)
             
-            # 添加新的port map行
+            # 取消隐藏port table中所有被隐藏的端口行
+            for i in range(self.port_table.rowCount()):
+                self.port_table.setRowHidden(i, False)
+            
+            # 隐藏所有bus interface行选中的端口
+            for bus_row, port_map in self.bus_interface_port_maps.items():
+                for physical_port in port_map.values():
+                    if physical_port:
+                        for i in range(self.port_table.rowCount()):
+                            port_btn = self.port_table.cellWidget(i, 0)
+                            if isinstance(port_btn, QPushButton):
+                                continue
+                            port_name_item = self.port_table.item(i, 0)
+                            if port_name_item and port_name_item.text().strip() == physical_port:
+                                self.port_table.setRowHidden(i, True)
+                                break
+            
+            # 添加新的port map行，并尝试恢复之前保存的map信息
             for signal in signals:
                 row = self.port_map_table.rowCount()
                 self.port_map_table.insertRow(row)
@@ -261,8 +380,8 @@ class NewComponentDialog(QDialog):
                     
                     # 解析abstract文件获取方向和位宽
                     port_direction, port_width = parser.parse_abstract_file(busdef_file, signal, mode)
-                except Exception as e:
-                    print(f"从abstract文件中读取port信息时出错: {e}")
+                except Exception:
+                    pass
                 
                 # 设置Port Direction
                 direction_item = QTableWidgetItem(port_direction)
@@ -277,21 +396,49 @@ class NewComponentDialog(QDialog):
                 # 物理端口（下拉菜单）
                 physical_port_combo = QComboBox()
                 physical_port_combo.addItem("Select Port")
+                
+                # 获取当前要恢复的物理端口（如果有）
+                current_restore_port = saved_port_maps.get(signal, None)
+                
                 # 获取port table中的信号列表，只添加方向一致且未被其他行选中的信号
-                port_signals = self.get_port_signals_with_direction(port_direction, row)
+                # 将当前要恢复的端口也传入，以便正确过滤
+                port_signals = self.get_port_signals_with_direction(port_direction, row, current_restore_port)
+                
+                # 检查当前要恢复的端口是否在列表中（可能被其他行选中而隐藏了）
+                port_names_in_list = [ps[0] for ps in port_signals]
+                if current_restore_port and current_restore_port not in port_names_in_list:
+                    # 当前要恢复的端口不在列表中，说明它被其他行选中了（已被隐藏）
+                    # 但我们仍然需要把它添加到下拉列表中并选中
+                    port_signals.insert(0, (current_restore_port, None))
+                
+                selected_physical_port = None
                 for port_signal, port_dir in port_signals:
                     physical_port_combo.addItem(port_signal)
+                    # 检查是否应该选中之前保存的端口
+                    if signal in saved_port_maps and port_signal == saved_port_maps[signal]:
+                        selected_physical_port = port_signal
+                
                 # 连接信号
                 physical_port_combo.currentIndexChanged.connect(lambda index, r=row: self.on_physical_port_changed(r, index))
                 self.port_map_table.setCellWidget(row, 1, physical_port_combo)
+                
+                # 立即恢复之前保存的端口选择（在添加下一行之前）
+                if selected_physical_port:
+                    index = physical_port_combo.findText(selected_physical_port)
+                    if index != -1:
+                        # 暂时阻塞信号以避免触发on_physical_port_changed
+                        physical_port_combo.blockSignals(True)
+                        physical_port_combo.setCurrentIndex(index)
+                        physical_port_combo.blockSignals(False)
+                        physical_port_combo.previous_port = selected_physical_port
                 
                 # Bus Interface
                 interface_item = QTableWidgetItem(interface_name)
                 interface_item.setFlags(interface_item.flags() & ~Qt.ItemIsEditable)  # 设置为不可编辑
                 self.port_map_table.setItem(row, 4, interface_item)
                 
-        except Exception as e:
-            print(f"解析总线定义文件时出错: {e}")
+        except Exception:
+            pass
     
     def browse_sv_file(self):
         """浏览并选择SystemVerilog文件"""
@@ -328,7 +475,7 @@ class NewComponentDialog(QDialog):
                     break
             
             if not top_module:
-                print("未找到模块声明")
+
                 return
             
             # 3. 提取define信息,现改为存储localparameter
@@ -359,7 +506,7 @@ class NewComponentDialog(QDialog):
                                                     default_val = declarator.initializer.toString() if hasattr(declarator.initializer, 'toString') else str(declarator.initializer)
                                                     # 去除可能的等号
                                                     default_val = default_val.split('=')[1].strip()
-                                                print(f"找到参数: {param_name}, 默认值: {default_val}")
+
                                                 parameters.append({"name": param_name, "type": param_type, "default": default_val})
                 
                 # 然后尝试从模块体中提取localparam
@@ -379,10 +526,9 @@ class NewComponentDialog(QDialog):
                                                 default_val = declarator.initializer.toString() if hasattr(declarator.initializer, 'toString') else str(declarator.initializer)
                                                 # 去除可能的等号
                                                 default_val = default_val.split('=')[1].strip()
-                                            print(f"找到localparam: {param_name}, 默认值: {default_val}")
+
                                             defines.append({"name": param_name, "type": param_type, "default": default_val})
             except Exception as e:
-                print(f"无法提取参数: {e}")
                 import traceback
                 traceback.print_exc()
             # 5. 提取port信息
@@ -474,7 +620,7 @@ class NewComponentDialog(QDialog):
                                                 # 提取位宽信息
                                                 width_part = data_type.split("[")[1].split("]")[0]
                                                 width = width_part
-                                        print(f"找到端口: {port_name}, 方向: {direction}, 位宽: {width}")
+
                                         ports.append({"name": port_name, "direction": direction, "width": width})
                                     elif hasattr(item, 'name'):
                                         # 直接从item获取名称
@@ -489,7 +635,7 @@ class NewComponentDialog(QDialog):
                                                 # 提取位宽信息
                                                 width_part = data_type.split("[")[1].split("]")[0]
                                                 width = width_part
-                                        print(f"找到端口: {port_name}, 方向: {direction}, 位宽: {width}")
+
                                         ports.append({"name": port_name, "direction": direction, "width": width})
                                     elif hasattr(item, 'declarators'):
                                         # 对于有declarators的类型
@@ -506,12 +652,12 @@ class NewComponentDialog(QDialog):
                                                         # 提取位宽信息
                                                         width_part = data_type.split("[")[1].split("]")[0]
                                                         width = width_part
-                                                print(f"找到端口: {port_name}, 方向: {direction}, 位宽: {width}")
+        
                                                 ports.append({"name": port_name, "direction": direction, "width": width})
                 
                 # 然后尝试从模块体中提取（如果头部没有）
                 if not ports and hasattr(top_module, 'members'):
-                    print("从模块体提取端口")
+
                     for member in top_module.members:
                         if hasattr(member, 'kind') and member.kind.name == 'PortDeclaration':
                             if hasattr(member, 'header') and hasattr(member.header, 'name'):
@@ -527,8 +673,7 @@ class NewComponentDialog(QDialog):
                                         width_part = data_type.split("[")[1].split("]")[0]
                                         width = width_part
                                 ports.append({"name": port_name, "direction": direction, "width": width})
-            except Exception as e:
-                print(f"无法提取端口: {e}")
+            except Exception:
                 import traceback
                 traceback.print_exc()
             
@@ -537,23 +682,27 @@ class NewComponentDialog(QDialog):
             self.parameter_table.setRowCount(0)
             self.port_table.setRowCount(0)
             
-            # 7. 添加localparameter信息到表格
-            if defines:
-                for define in defines:
-                    row = self.localparameter_table.rowCount()
-                    self.localparameter_table.insertRow(row)
-                    self.localparameter_table.setItem(row, 0, QTableWidgetItem(define["name"]))
-                    self.localparameter_table.setItem(row, 1, QTableWidgetItem(define["type"]))
-                    self.localparameter_table.setItem(row, 2, QTableWidgetItem(define["default"]))
-            
-            # 8. 添加parameter信息到表格
+            # 7. 添加parameter信息到表格（先添加，以便localparameter和port可以引用）
             if parameters:
                 for param in parameters:
                     row = self.parameter_table.rowCount()
                     self.parameter_table.insertRow(row)
                     self.parameter_table.setItem(row, 0, QTableWidgetItem(param["name"]))
                     self.parameter_table.setItem(row, 1, QTableWidgetItem(param["type"]))
-                    self.parameter_table.setItem(row, 2, QTableWidgetItem(param["default"]))
+                    # 使用safe_eval计算parameter值（处理数学运算）
+                    param_value = self.safe_eval(str(param["default"]))
+                    self.parameter_table.setItem(row, 2, QTableWidgetItem(param_value))
+            
+            # 8. 添加localparameter信息到表格（现在可以引用parameter了）
+            if defines:
+                for define in defines:
+                    row = self.localparameter_table.rowCount()
+                    self.localparameter_table.insertRow(row)
+                    self.localparameter_table.setItem(row, 0, QTableWidgetItem(define["name"]))
+                    self.localparameter_table.setItem(row, 1, QTableWidgetItem(define["type"]))
+                    # 使用safe_eval计算localparameter值（处理parameter替换和数学运算）
+                    define_value = self.safe_eval(str(define["default"]))
+                    self.localparameter_table.setItem(row, 2, QTableWidgetItem(define_value))
             
             # 9. 添加port信息到表格
             if ports:
@@ -567,9 +716,7 @@ class NewComponentDialog(QDialog):
                     direction_combo.setCurrentText(port["direction"])
                     self.port_table.setCellWidget(row, 1, direction_combo)
                     
-                    self.port_table.setItem(row, 2, QTableWidgetItem(port["width"]))
-                    
-                    # 计算MSB和LSB
+                    # 计算MSB、LSB和位宽
                     msb = "0"
                     lsb = "0"
                     width = port["width"]
@@ -582,6 +729,8 @@ class NewComponentDialog(QDialog):
                         if last_colon_idx != -1:
                             msb = width[:last_colon_idx].strip().replace("[", "")
                             lsb = width[last_colon_idx+1:].strip().replace("]", "")
+                            # 位宽 = MSB - LSB + 1
+                            width_value = f"({msb})-({lsb})+1"
                     elif "[" in width and "]" in width:
                         # 提取位宽信息
                         # 使用rfind找到最后一个]，以处理多维数组的情况
@@ -595,17 +744,30 @@ class NewComponentDialog(QDialog):
                                 if last_colon_idx != -1:
                                     msb = width_part[:last_colon_idx].strip()
                                     lsb = width_part[last_colon_idx+1:].strip()
+                                    # 位宽 = MSB - LSB + 1
+                                    width_value = f"({msb})-({lsb})+1"
+                            else:
+                                # 只有位宽数值，如 [8]
+                                width_value = width_part
+                        else:
+                            width_value = self.safe_eval(str(port["width"]))
+                    else:
+                        # 普通数值位宽
+                        width_value = self.safe_eval(str(port["width"]))
                     
-                    self.port_table.setItem(row, 3, QTableWidgetItem(msb))
-                    self.port_table.setItem(row, 4, QTableWidgetItem(lsb))
+                    # 使用safe_eval计算位宽、MSB和LSB（处理parameter替换和数学运算）
+                    width_value = self.safe_eval(width_value)
+                    msb_value = self.safe_eval(msb)
+                    lsb_value = self.safe_eval(lsb)
+                    self.port_table.setItem(row, 2, QTableWidgetItem(width_value))
+                    self.port_table.setItem(row, 3, QTableWidgetItem(msb_value))
+                    self.port_table.setItem(row, 4, QTableWidgetItem(lsb_value))
 
-            print(f"成功解析SystemVerilog文件: {file_path}")
-            print(f"提取了 {len(defines)} 个localparameter, {len(parameters)} 个parameter和 {len(ports)} 个port")
+
             
         except ImportError:
             QMessageBox.warning(self, "警告", "pyslang库未安装，无法自动解析SystemVerilog文件")
         except Exception as e:
-            print(f"解析SystemVerilog文件时出错: {e}")
             QMessageBox.warning(self, "警告", f"解析SystemVerilog文件时出错: {str(e)}")
     
     def add_define_row(self):
@@ -824,6 +986,7 @@ class NewComponentDialog(QDialog):
                     # 检查方向是否相同
                     if normalized_port_direction != normalized_map_direction:
                         QMessageBox.warning(self, "警告", f"选择的端口 '{current_port}' 的方向 '{port_direction}' 与表格中的方向 '{map_direction}' 不匹配！")
+                        allow_change = False
                     
                     # 检查位宽是否相同
                     if port_width != map_width:
@@ -844,6 +1007,17 @@ class NewComponentDialog(QDialog):
                     if port_name_item and port_name_item.text().strip() == current_port:
                         self.port_table.setRowHidden(i, True)
                         break
+                
+                # 更新 bus_interface_port_maps 字典
+                if self.current_bus_interface_row is not None:
+                    logical_port_item = self.port_map_table.item(row, 0)
+                    if logical_port_item:
+                        logical_port = logical_port_item.text().strip()
+                        if self.current_bus_interface_row in self.bus_interface_port_maps:
+                            if current_port:
+                                self.bus_interface_port_maps[self.current_bus_interface_row][logical_port] = current_port
+                            elif logical_port in self.bus_interface_port_maps[self.current_bus_interface_row]:
+                                del self.bus_interface_port_maps[self.current_bus_interface_row][logical_port]
                 
                 # 保存当前选择的端口
                 physical_port_combo.previous_port = current_port
@@ -878,7 +1052,14 @@ class NewComponentDialog(QDialog):
                         physical_port_combo.setCurrentIndex(index)
                         physical_port_combo.currentIndexChanged.connect(lambda index, r=row: self.on_physical_port_changed(r, index))
         else:
-            # 如果取消选择端口，保持当前状态
+            # 如果取消选择端口，更新字典删除该映射
+            if self.current_bus_interface_row is not None:
+                logical_port_item = self.port_map_table.item(row, 0)
+                if logical_port_item:
+                    logical_port = logical_port_item.text().strip()
+                    if self.current_bus_interface_row in self.bus_interface_port_maps:
+                        if logical_port in self.bus_interface_port_maps[self.current_bus_interface_row]:
+                            del self.bus_interface_port_maps[self.current_bus_interface_row][logical_port]
             physical_port_combo.previous_port = current_port
         
         # 保存当前行的选择
@@ -906,11 +1087,11 @@ class NewComponentDialog(QDialog):
                 port_signals.append(port_name_item.text().strip())
         return port_signals
     
-    def get_port_signals_with_direction(self, direction, current_row=None):
+    def get_port_signals_with_direction(self, direction, current_row=None, current_restore_port=None):
         """获取与给定方向一致且未被其他行选中的端口列表"""
         port_signals = []
         
-        # 获取所有已被选中的端口
+        # 获取当前port_map_table中所有已被选中的端口
         selected_ports = []
         for i in range(self.port_map_table.rowCount()):
             # 跳过当前行
@@ -933,6 +1114,18 @@ class NewComponentDialog(QDialog):
                 if current_row_selection == "Select Port":
                     current_row_selection = None
         
+        # 获取其他bus interface行选中的端口（从bus_interface_port_maps字典中获取）
+        # 这样即使port_map_table被清空，也能检测到冲突
+        if self.current_bus_interface_row is not None:
+            for bus_row, port_map in self.bus_interface_port_maps.items():
+                # 跳过当前bus interface行（它的映射会在下面单独处理）
+                if bus_row == self.current_bus_interface_row:
+                    continue
+                # 添加该bus interface行选中的所有端口
+                for physical_port in port_map.values():
+                    if physical_port and physical_port not in selected_ports:
+                        selected_ports.append(physical_port)
+        
         for i in range(self.port_table.rowCount()):
             # 跳过添加按钮行
             btn = self.port_table.cellWidget(i, 0)
@@ -948,8 +1141,8 @@ class NewComponentDialog(QDialog):
             if port_name_item:
                 port_name = port_name_item.text().strip()
                 
-                # 检查端口是否已被其他行选中，当前行的选择除外
-                if port_name in selected_ports and port_name != current_row_selection:
+                # 检查端口是否已被其他行选中，当前行的选择和要恢复的端口除外
+                if port_name in selected_ports and port_name != current_row_selection and port_name != current_restore_port:
                     continue
                 
                 # 获取端口方向
@@ -1044,12 +1237,26 @@ class NewComponentDialog(QDialog):
     
     def accept(self):
         """点击确定按钮时，保存bus interface和port map两个table中的信息到xml文件中"""
+        
+        # 在保存前检查是否已存在同名同版本的component
+        name = self.name_input.text().strip()
+        version = self.version_input.text().strip()
+        
+        # 获取parent中的components列表
+        if self.parent() and hasattr(self.parent(), 'components'):
+            for existing_component in self.parent().components:
+                existing_name = existing_component.get('name', '')
+                existing_version = existing_component.get('version', '')
+                if existing_name == name and existing_version == version:
+                    QMessageBox.warning(self, "警告", f"已存在同名同版本的Component: {name} v{version}，请修改名称或版本号")
+                    return  # 不关闭对话框，保留用户的工作
+        
         # 收集component基本信息
         component_data = {
             'vendor': self.vendor_input.text().strip(),
             'library': self.library_input.text().strip(),
-            'name': self.name_input.text().strip(),
-            'version': self.version_input.text().strip(),
+            'name': name,
+            'version': version,
             'description': '',  # 使用默认值，因为没有description_input属性
             'ports': [],
             'bus_interfaces': [],
@@ -1103,11 +1310,11 @@ class NewComponentDialog(QDialog):
             if not interface_name:
                 continue
             
-            # 获取bus type
-            bus_type_item = self.bus_interface_table.item(i, 1)
-            bus_type = bus_type_item.text().strip() if bus_type_item else "AXI4"
+            # 获取bus type（第1列是QComboBox）
+            bus_type_combo = self.bus_interface_table.cellWidget(i, 1)
+            bus_type = bus_type_combo.currentText() if bus_type_combo else "AXI4"
             
-            # 获取mode
+            # 获取mode（第2列是QComboBox）
             mode_widget = self.bus_interface_table.cellWidget(i, 2)
             mode = mode_widget.currentText() if mode_widget else "master"
             
@@ -1116,9 +1323,9 @@ class NewComponentDialog(QDialog):
                 'name': interface_name,
                 'bus_type': bus_type,
                 'mode': mode,
-                'vendor': 'Phytium',  # 可以根据实际情况修改
-                'library': 'LowSpeedDevice',  # 可以根据实际情况修改
-                'version': '1.0'  # 可以根据实际情况修改
+                'vendor': 'Phytium',
+                'library': 'LowSpeedDevice',
+                'version': '1.0'
             })
         
         # 收集port map table中的信息
@@ -1206,33 +1413,68 @@ class NewComponentDialog(QDialog):
         
         # 选择保存文件路径
         file_path = ""
-        # 检查是否已经设置了library_dir
-        library_dir = ""
-        # 检查父窗口是否有library_directory属性
+        # 检查是否已经设置了library目录
+        library_dirs = []
+        # 检查父窗口是否有library_directories或library_directory属性
         if self.parent():
-            if hasattr(self.parent(), 'library_directory') and self.parent().library_directory:
-                library_dir = self.parent().library_directory
+            if hasattr(self.parent(), 'library_directories') and self.parent().library_directories:
+                library_dirs = self.parent().library_directories
+            elif hasattr(self.parent(), 'library_directory') and self.parent().library_directory:
+                library_dirs = [self.parent().library_directory]
             # 如果父窗口是ComponentListWidget，检查它的main_window属性
             elif hasattr(self.parent(), 'main_window') and self.parent().main_window:
-                if hasattr(self.parent().main_window, 'library_directory') and self.parent().main_window.library_directory:
-                    library_dir = self.parent().main_window.library_directory
+                if hasattr(self.parent().main_window, 'library_directories') and self.parent().main_window.library_directories:
+                    library_dirs = self.parent().main_window.library_directories
+                elif hasattr(self.parent().main_window, 'library_directory') and self.parent().main_window.library_directory:
+                    library_dirs = [self.parent().main_window.library_directory]
         
-        if library_dir:
-            # 使用library_directory作为保存路径
-            # 构建保存文件路径
-            component_name = component_data.get('name', 'NewComponent')
-            version = component_data.get('version', '1.0')
-            # 构建文件名：name_version.xml
-            file_name = f"{component_name}_{version.replace('.', '_')}.xml"
-            # 构建完整路径：library_dir/IP/file_name
-            file_path = os.path.join(library_dir, "IP", file_name)
-            # 确保IP目录存在
-            os.makedirs(os.path.join(library_dir, "IP"), exist_ok=True)
+        # 如果没有设置library目录，使用默认路径
+        if not library_dirs:
+            default_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "library")
+            if os.path.exists(default_dir):
+                library_dirs = [default_dir]
+        
+        if len(library_dirs) == 1:
+            # 只有一个library目录，直接使用
+            library_dir = library_dirs[0]
+        elif len(library_dirs) > 1:
+            # 有多个library目录，让用户选择
+            items = [os.path.basename(d) for d in library_dirs]
+            item, ok = QInputDialog.getItem(self, "选择保存目录", "请选择要保存的Library目录:", items, 0, False)
+            if ok and item:
+                # 找到用户选择的目录
+                selected_name = item
+                for d in library_dirs:
+                    if os.path.basename(d) == selected_name:
+                        library_dir = d
+                        break
+            else:
+                return
         else:
-            # 否则，让用户选择保存文件路径
+            # 没有library目录，让用户选择保存路径
             file_path, _ = QFileDialog.getSaveFileName(
                 self, "保存Component文件", "", "XML文件 (*.xml)"
             )
+            if not file_path:
+                return
+            # 保存到用户选择的路径
+            writer = IPXactWriter()
+            success = writer.create_component_file(file_path, component_data)
+            if success:
+                QMessageBox.information(self, "成功", f"Component文件保存成功: {file_path}")
+                self.edited_component_data = component_data
+                super().accept()
+            else:
+                QMessageBox.warning(self, "失败", "Component文件保存失败！")
+            return
+        
+        if library_dir:
+            # 使用library_dir作为保存路径
+            component_name = component_data.get('name', 'NewComponent')
+            version = component_data.get('version', '1.0')
+            file_name = f"{component_name}_{version.replace('.', '_')}.xml"
+            file_path = os.path.join(library_dir, "IP", file_name)
+            os.makedirs(os.path.join(library_dir, "IP"), exist_ok=True)
         if not file_path:
             return
         
@@ -1298,27 +1540,35 @@ class NewComponentDialog(QDialog):
         
         # 扫描library/busdef目录下的所有总线定义
         bus_defs = []
-        # 从主窗口获取library库目录
-        if self.parent() and hasattr(self.parent(), 'library_directory'):
-            library_dir = self.parent().library_directory
+        library_dirs = []
+
+        if self.parent():
+            if hasattr(self.parent(), 'library_directories'):
+                library_dirs = self.parent().library_directories
+            elif hasattr(self.parent(), 'library_directory'):
+                library_dir = self.parent().library_directory
+                if library_dir:
+                    library_dirs = [library_dir]
+
+        if not library_dirs:
+            default_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "library")
+            if os.path.exists(default_dir):
+                library_dirs = [default_dir]
+
+        for library_dir in library_dirs:
             busdef_dir = os.path.join(library_dir, "busdef")
-        else:
-            # 如果主窗口没有library_directory属性，使用默认路径
-            busdef_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "library", "busdef")
-        
-        if os.path.exists(busdef_dir):
-            for file_name in os.listdir(busdef_dir):
-                if file_name.endswith(".xml"):
-                    file_path = os.path.join(busdef_dir, file_name)
-                    try:
-                        tree = ET.parse(file_path)
-                        root = tree.getroot()
-                        # 提取总线定义的名称
-                        name_elem = root.find(".//{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name")
-                        if name_elem is not None:
-                            bus_defs.append(name_elem.text)
-                    except Exception as e:
-                        print(f"解析总线定义文件 {file_name} 时出错: {e}")
+            if os.path.exists(busdef_dir):
+                for file_name in os.listdir(busdef_dir):
+                    if file_name.endswith(".xml"):
+                        file_path = os.path.join(busdef_dir, file_name)
+                        try:
+                            tree = ET.parse(file_path)
+                            root = tree.getroot()
+                            name_elem = root.find(".//{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name")
+                            if name_elem is not None and name_elem.text not in bus_defs:
+                                bus_defs.append(name_elem.text)
+                        except Exception as e:
+                            print(f"解析总线定义文件 {file_name} 时出错: {e}")
         
         # 如果没有找到总线定义，添加默认值
         if not bus_defs:
@@ -1327,7 +1577,11 @@ class NewComponentDialog(QDialog):
         # 在表格末尾添加新的bus interface行
         row = self.bus_interface_table.rowCount()
         self.bus_interface_table.insertRow(row)
-        self.bus_interface_table.setItem(row, 0, QTableWidgetItem(f"bus_interface_{row + 1}"))
+        self.bus_interface_table.setItem(row, 0, QTableWidgetItem(""))  # 默认Name列为空
+        
+        # 初始化该bus interface的port map信息字典
+        # 使用row作为唯一标识（因为Name可能为空）
+        self.bus_interface_port_maps[row] = {}
         
         # 第2列：总线类型下拉菜单
         bus_type_combo = QComboBox()
@@ -1625,9 +1879,11 @@ class NewComponentDialog(QDialog):
             if isinstance(btn, QPushButton):
                 continue
             logical_port = self.port_map_table.item(i, 0).text().strip()
-            physical_port = self.port_map_table.item(i, 1).text().strip()
-            bus_interface = self.port_map_table.item(i, 2).text().strip()
-            if logical_port and physical_port:
+            # Physical Port 是 QComboBox，需要用 cellWidget 获取
+            physical_port_combo = self.port_map_table.cellWidget(i, 1)
+            physical_port = physical_port_combo.currentText().strip() if physical_port_combo else ""
+            bus_interface = self.port_map_table.item(i, 4).text().strip() if self.port_map_table.item(i, 4) else ""
+            if logical_port and physical_port and physical_port != "Select Port":
                 port_maps.append({"logical_port": logical_port, "physical_port": physical_port, "bus_interface": bus_interface})
         
         return {
@@ -1668,9 +1924,13 @@ class NewComponentDialog(QDialog):
             combo_direction = direction_map.get(xml_direction, 'input')
             direction_combo.setCurrentText(combo_direction)
             self.port_table.setCellWidget(i, 1, direction_combo)
-            self.port_table.setItem(i, 2, QTableWidgetItem(str(port.get('width', '1'))))
-            self.port_table.setItem(i, 3, QTableWidgetItem(str(port.get('msb', '0'))))
-            self.port_table.setItem(i, 4, QTableWidgetItem(str(port.get('lsb', '0'))))
+            # 使用safe_eval计算公式
+            width_value = self.safe_eval(str(port.get('width', '1')))
+            self.port_table.setItem(i, 2, QTableWidgetItem(width_value))
+            msb_value = self.safe_eval(str(port.get('msb', '0')))
+            self.port_table.setItem(i, 3, QTableWidgetItem(msb_value))
+            lsb_value = self.safe_eval(str(port.get('lsb', '0')))
+            self.port_table.setItem(i, 4, QTableWidgetItem(lsb_value))
             # 添加删除按钮
             delete_button = QPushButton()
             delete_icon = QIcon("src/delete.svg")
@@ -1710,7 +1970,9 @@ class NewComponentDialog(QDialog):
         for i, define in enumerate(defines):
             self.localparameter_table.setItem(i, 0, QTableWidgetItem(define.get('name', '')))
             self.localparameter_table.setItem(i, 1, QTableWidgetItem(define.get('type', 'int')))
-            self.localparameter_table.setItem(i, 2, QTableWidgetItem(str(define.get('default', ''))))
+            # 使用safe_eval计算公式
+            default_value = self.safe_eval(str(define.get('default', '')))
+            self.localparameter_table.setItem(i, 2, QTableWidgetItem(default_value))
             # 添加删除按钮
             delete_button = QPushButton()
             delete_icon = QIcon("src/delete.svg")
@@ -1737,7 +1999,9 @@ class NewComponentDialog(QDialog):
         for i, param in enumerate(parameters):
             self.parameter_table.setItem(i, 0, QTableWidgetItem(param.get('name', '')))
             self.parameter_table.setItem(i, 1, QTableWidgetItem(param.get('type', 'int')))
-            self.parameter_table.setItem(i, 2, QTableWidgetItem(str(param.get('default', ''))))
+            # 使用safe_eval计算公式
+            default_value = self.safe_eval(str(param.get('default', '')))
+            self.parameter_table.setItem(i, 2, QTableWidgetItem(default_value))
             # 添加删除按钮
             delete_button = QPushButton()
             delete_icon = QIcon("src/delete.svg")
@@ -1773,12 +2037,23 @@ class NewComponentDialog(QDialog):
                     self.bus_interface_table.removeRow(i)
                     break
         
+        # 初始化bus_interface_port_maps字典
+        self.bus_interface_port_maps = {}
+        
         self.bus_interface_table.setRowCount(len(bus_interfaces))
         for i, bus_interface in enumerate(bus_interfaces):
             # Name
             self.bus_interface_table.setItem(i, 0, QTableWidgetItem(bus_interface.get('name', '')))
-            # Bus Type
-            self.bus_interface_table.setItem(i, 1, QTableWidgetItem(bus_interface.get('bus_type', 'AXI4')))
+            
+            # Bus Type下拉菜单
+            bus_type_combo = QComboBox()
+            bus_type_combo.addItems(["amba4.axi4", "amba4.apb", "amba4.ahb"])
+            bus_type_combo.setCurrentText(bus_interface.get('bus_type', 'amba4.axi4'))
+            self.bus_interface_table.setCellWidget(i, 1, bus_type_combo)
+            
+            # 初始化该bus interface的port map信息字典
+            self.bus_interface_port_maps[i] = {}
+            
             # Mode下拉菜单
             mode_combo = QComboBox()
             mode_combo.addItems(["master", "slave"])

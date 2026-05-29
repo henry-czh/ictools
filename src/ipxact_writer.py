@@ -109,7 +109,6 @@ class IPXactWriter:
             
             # 写回文件
             tree.write(file_path, encoding='UTF-8', xml_declaration=True)
-            print(f"成功写入文件: {file_path}")
             return True
             
         except Exception as e:
@@ -325,7 +324,6 @@ class IPXactWriter:
             
             # 写回文件
             tree.write(file_path, encoding='UTF-8', xml_declaration=True)
-            print(f"成功创建component文件: {file_path}")
             return True
             
         except Exception as e:

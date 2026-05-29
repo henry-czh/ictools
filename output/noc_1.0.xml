@@ -1,0 +1,37 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ipxact:component xmlns:ipxact="http://www.accellera.org/XMLSchema/IPXACT/1685-2014">
+    <ipxact:vendor>Phytium</ipxact:vendor>
+    <ipxact:library>interegrated</ipxact:library>
+    <ipxact:name>noc_1.0</ipxact:name>
+    <ipxact:version>1.0</ipxact:version>
+    <ipxact:description />
+    <ipxact:model>
+        <ipxact:ports />
+        <ipxact:componentInstances>
+            <ipxact:interconnections>
+                <ipxact:interconnection>
+                    <ipxact:name>connection_2</ipxact:name>
+                    <ipxact:source>
+                        <ipxact:instanceName>u_QSPI_1</ipxact:instanceName>
+                        <ipxact:portName>data_out</ipxact:portName>
+                    </ipxact:source>
+                    <ipxact:destination>
+                        <ipxact:instanceName>u_QSPI_0</ipxact:instanceName>
+                        <ipxact:portName>data_in</ipxact:portName>
+                    </ipxact:destination>
+                </ipxact:interconnection>
+                <ipxact:interconnection>
+                    <ipxact:name>connection_4</ipxact:name>
+                    <ipxact:source>
+                        <ipxact:instanceName>u_QSPI_2</ipxact:instanceName>
+                        <ipxact:portName>data_out</ipxact:portName>
+                    </ipxact:source>
+                    <ipxact:destination>
+                        <ipxact:instanceName>data1</ipxact:instanceName>
+                        <ipxact:portName>out</ipxact:portName>
+                    </ipxact:destination>
+                </ipxact:interconnection>
+            <ipxact:interconnection><ipxact:name>connection_1</ipxact:name><ipxact:source><ipxact:instanceName>u_QSPI_0</ipxact:instanceName><ipxact:portName>data_out</ipxact:portName></ipxact:source><ipxact:destination><ipxact:instanceName>u_QSPI_2</ipxact:instanceName><ipxact:portName>data_in</ipxact:portName></ipxact:destination></ipxact:interconnection><ipxact:interconnection><ipxact:name>connection_2</ipxact:name><ipxact:source><ipxact:instanceName>u_QSPI_0</ipxact:instanceName><ipxact:portName>data_out</ipxact:portName></ipxact:source><ipxact:destination><ipxact:instanceName>u_QSPI_1</ipxact:instanceName><ipxact:portName>data_in</ipxact:portName></ipxact:destination></ipxact:interconnection><ipxact:interconnection><ipxact:name>connection_3</ipxact:name><ipxact:source><ipxact:instanceName>u_QSPI_1</ipxact:instanceName><ipxact:portName>data_out</ipxact:portName></ipxact:source><ipxact:destination><ipxact:instanceName>OutPort</ipxact:instanceName><ipxact:portName>out</ipxact:portName></ipxact:destination></ipxact:interconnection><ipxact:interconnection><ipxact:name>connection_4</ipxact:name><ipxact:source><ipxact:instanceName>u_QSPI_2</ipxact:instanceName><ipxact:portName>data_out</ipxact:portName></ipxact:source><ipxact:destination><ipxact:instanceName>data_out</ipxact:instanceName><ipxact:portName>out</ipxact:portName></ipxact:destination></ipxact:interconnection></ipxact:interconnections>
+        </ipxact:componentInstances>
+    </ipxact:model>
+</ipxact:component>
