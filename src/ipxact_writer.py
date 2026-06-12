@@ -1,5 +1,6 @@
 import xml.etree.ElementTree as ET
 import os
+import json
 
 class IPXactWriter:
     def __init__(self):
@@ -220,13 +221,14 @@ class IPXactWriter:
             for param in component_data.get('parameters', []):
                 parameter_elem = ET.SubElement(parameters, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}parameter')
                 
-                # 添加parameter名称
                 param_name = ET.SubElement(parameter_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name')
                 param_name.text = param.get('name', 'UnknownParameter')
                 
-                # 添加parameter value
+                param_type = ET.SubElement(parameter_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}dataType')
+                param_type.text = param.get('type', 'int')
+                
                 param_value = ET.SubElement(parameter_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}value')
-                param_value.text = param.get('default', '')
+                param_value.text = param.get('default_value', '')
             
             # 添加localParameters元素
             local_parameters = ET.SubElement(model, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}localParameters')
@@ -235,13 +237,14 @@ class IPXactWriter:
             for define in component_data.get('defines', []):
                 local_param_elem = ET.SubElement(local_parameters, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}localParameter')
                 
-                # 添加localParameter名称
                 local_param_name = ET.SubElement(local_param_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name')
                 local_param_name.text = define.get('name', 'UnknownLocalParameter')
                 
-                # 添加localParameter value
+                local_param_type = ET.SubElement(local_param_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}dataType')
+                local_param_type.text = define.get('type', 'int')
+                
                 local_param_value = ET.SubElement(local_param_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}value')
-                local_param_value.text = define.get('default', '')
+                local_param_value.text = define.get('default_value', '')
             
             # 添加componentInstances元素
             component_instances = ET.SubElement(model, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}componentInstances')
@@ -330,6 +333,165 @@ class IPXactWriter:
             print(f"创建component文件时出错: {e}")
             return False
     
+    def create_top_component_file(self, file_path, project_data, nodes_component_data, connections, node_positions=None, session_json=None):
+        """创建顶层component的IP-XACT XML文件，包含port、instance、connection信息和完整的session数据"""
+        try:
+            # 定义命名空间
+            namespace = 'http://www.accellera.org/XMLSchema/IPXACT/1685-2014'
+            ET.register_namespace('ipxact', namespace)
+            # 注册自定义扩展命名空间
+            ET.register_namespace('viz', 'http://www.phytium.com/XMLSchema/visualizer/1.0')
+            
+            # 创建新的IP-XACT XML结构
+            root = ET.Element('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}component')
+            
+            # 添加基本元素
+            vendor = ET.SubElement(root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}vendor')
+            vendor.text = project_data.get('vendor', 'Phytium')
+            
+            library = ET.SubElement(root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}library')
+            library.text = project_data.get('library', 'interegrated')
+            
+            name = ET.SubElement(root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name')
+            name.text = project_data.get('module_name', 'UnknownModule')
+            
+            version = ET.SubElement(root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}version')
+            version.text = project_data.get('version', '1.0')
+            
+            # 添加description元素
+            description = ET.SubElement(root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}description')
+            description.text = project_data.get('description', '')
+            
+            # 添加vendorExtensions元素（用于存储可视化信息和session数据）
+            vendor_extensions = ET.SubElement(root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}vendorExtensions')
+            
+            # 添加visualizer扩展元素
+            viz_extension = ET.SubElement(vendor_extensions, '{http://www.phytium.com/XMLSchema/visualizer/1.0}visualizer')
+            
+            # 添加component_drag_count（字典类型，需要序列化为JSON）
+            drag_count = ET.SubElement(viz_extension, '{http://www.phytium.com/XMLSchema/visualizer/1.0}componentDragCount')
+            drag_count_data = project_data.get('component_drag_count', {})
+            drag_count.text = json.dumps(drag_count_data)
+            
+            # 添加完整的session JSON数据（包含节点位置等所有graph信息）
+            session_data_elem = ET.SubElement(viz_extension, '{http://www.phytium.com/XMLSchema/visualizer/1.0}sessionData')
+            if session_json:
+                session_data_elem.text = json.dumps(session_json, ensure_ascii=False)
+            
+            # 添加model元素
+            model = ET.SubElement(root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}model')
+            
+            # 添加ports元素
+            ports = ET.SubElement(model, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}ports')
+            
+            # 添加parameters元素
+            parameters = ET.SubElement(model, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}parameters')
+            
+            # 添加componentInstances元素
+            component_instances = ET.SubElement(model, '{http://www.accellera.org/IPXACT/1685-2014}componentInstances')
+            
+            # 添加interconnections元素
+            interconnections = ET.SubElement(component_instances, '{http://www.accellera.org/IPXACT/1685-2014}interconnections')
+            
+            # 定义命名空间字典
+            ns = {'ipxact': namespace}
+            
+            # 添加顶层输入输出端口
+            input_ports = project_data.get('input_ports', [])
+            output_ports = project_data.get('output_ports', [])
+            
+            for port in input_ports:
+                port_elem = ET.SubElement(ports, '{http://www.accellera.org/IPXACT/1685-2014}port')
+                port_name_elem = ET.SubElement(port_elem, '{http://www.accellera.org/IPXACT/1685-2014}name')
+                port_name_elem.text = port.get('name', 'UnknownPort')
+                direction_elem = ET.SubElement(port_elem, '{http://www.accellera.org/IPXACT/1685-2014}direction')
+                direction_elem.text = 'in'
+                wire_elem = ET.SubElement(port_elem, '{http://www.accellera.org/IPXACT/1685-2014}wire')
+                width_elem = ET.SubElement(wire_elem, '{http://www.accellera.org/IPXACT/1685-2014}width')
+                width_elem.text = str(port.get('width', 1))
+            
+            for port in output_ports:
+                port_elem = ET.SubElement(ports, '{http://www.accellera.org/IPXACT/1685-2014}port')
+                port_name_elem = ET.SubElement(port_elem, '{http://www.accellera.org/IPXACT/1685-2014}name')
+                port_name_elem.text = port.get('name', 'UnknownPort')
+                direction_elem = ET.SubElement(port_elem, '{http://www.accellera.org/IPXACT/1685-2014}direction')
+                direction_elem.text = 'out'
+                wire_elem = ET.SubElement(port_elem, '{http://www.accellera.org/IPXACT/1685-2014}wire')
+                width_elem = ET.SubElement(wire_elem, '{http://www.accellera.org/IPXACT/1685-2014}width')
+                width_elem.text = str(port.get('width', 1))
+            
+            # 添加component instances
+            for instance_name, instance_info in nodes_component_data.items():
+                component_data = instance_info.get('component_data', {})
+                node_type = instance_info.get('node_type', '')
+                
+                # 跳过CircleNodeIn和CircleNodeOut
+                if 'CircleNodeIn' in node_type or 'CircleNodeOut' in node_type:
+                    continue
+                
+                instance_elem = ET.SubElement(component_instances, '{http://www.accellera.org/IPXACT/1685-2014}componentInstance')
+                
+                # 添加instance名称
+                instance_name_elem = ET.SubElement(instance_elem, '{http://www.accellera.org/IPXACT/1685-2014}instanceName')
+                instance_name_elem.text = instance_name
+                
+                # 添加componentRef
+                component_ref = ET.SubElement(instance_elem, '{http://www.accellera.org/IPXACT/1685-2014}componentRef')
+                
+                vendor_ref = ET.SubElement(component_ref, '{http://www.accellera.org/IPXACT/1685-2014}vendor')
+                vendor_ref.text = component_data.get('vendor', 'Phytium')
+                
+                library_ref = ET.SubElement(component_ref, '{http://www.accellera.org/IPXACT/1685-2014}library')
+                library_ref.text = component_data.get('library', 'interegrated')
+                
+                name_ref = ET.SubElement(component_ref, '{http://www.accellera.org/IPXACT/1685-2014}name')
+                name_ref.text = component_data.get('name', 'UnknownComponent')
+                
+                version_ref = ET.SubElement(component_ref, '{http://www.accellera.org/IPXACT/1685-2014}version')
+                version_ref.text = component_data.get('version', '1.0')
+            
+            # 添加interconnections
+            for i, connection in enumerate(connections):
+                interconnection_elem = ET.SubElement(interconnections, '{http://www.accellera.org/IPXACT/1685-2014}interconnection')
+                
+                # 添加interconnection名称
+                interconnection_name = ET.SubElement(interconnection_elem, '{http://www.accellera.org/IPXACT/1685-2014}name')
+                interconnection_name.text = f"connection_{i+1}"
+                
+                # 添加source
+                source_elem = ET.SubElement(interconnection_elem, '{http://www.accellera.org/IPXACT/1685-2014}source')
+                
+                src_instance_name = ET.SubElement(source_elem, '{http://www.accellera.org/IPXACT/1685-2014}instanceName')
+                src_instance_name.text = connection.get('source_instance', '')
+                
+                src_port_name = ET.SubElement(source_elem, '{http://www.accellera.org/IPXACT/1685-2014}portName')
+                src_port_name.text = connection.get('source_port', '')
+                
+                # 添加destination
+                dest_elem = ET.SubElement(interconnection_elem, '{http://www.accellera.org/IPXACT/1685-2014}destination')
+                
+                dest_instance_name = ET.SubElement(dest_elem, '{http://www.accellera.org/IPXACT/1685-2014}instanceName')
+                dest_instance_name.text = connection.get('target_instance', '')
+                
+                dest_port_name = ET.SubElement(dest_elem, '{http://www.accellera.org/IPXACT/1685-2014}portName')
+                dest_port_name.text = connection.get('target_port', '')
+            
+            # 创建树
+            tree = ET.ElementTree(root)
+            
+            # 确保目录存在
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            
+            # 写回文件
+            tree.write(file_path, encoding='UTF-8', xml_declaration=True)
+            return True
+            
+        except Exception as e:
+            print(f"创建顶层component文件时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
     def write_bus_definition(self, busdef_data, save_dir):
         """将bus definition写入XML文件"""
         try:
@@ -345,44 +507,44 @@ class IPXactWriter:
             vendor_elem.text = busdef_data['vendor']
             
             # 添加library
-            library_elem = ET.SubElement(root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}library')
+            library_elem = ET.SubElement(root, '{http://www.accellera.org/IPXACT/1685-2014}library')
             library_elem.text = busdef_data['library']
             
             # 添加name
-            name_elem = ET.SubElement(root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name')
+            name_elem = ET.SubElement(root, '{http://www.accellera.org/IPXACT/1685-2014}name')
             name_elem.text = busdef_data['name']
             
             # 添加version
-            version_elem = ET.SubElement(root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}version')
+            version_elem = ET.SubElement(root, '{http://www.accellera.org/IPXACT/1685-2014}version')
             version_elem.text = busdef_data['version']
             
             # 添加description
-            description_elem = ET.SubElement(root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}description')
+            description_elem = ET.SubElement(root, '{http://www.accellera.org/IPXACT/1685-2014}description')
             description_elem.text = busdef_data.get('description', '')
             
             # 添加signalDefinitions
-            signal_definitions_elem = ET.SubElement(root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}signalDefinitions')
+            signal_definitions_elem = ET.SubElement(root, '{http://www.accellera.org/IPXACT/1685-2014}signalDefinitions')
             
             # 添加每个signal
             for signal in busdef_data['signals']:
-                signal_elem = ET.SubElement(signal_definitions_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}signalDefinition')
+                signal_elem = ET.SubElement(signal_definitions_elem, '{http://www.accellera.org/IPXACT/1685-2014}signalDefinition')
                 
                 # 添加signal name
-                signal_name_elem = ET.SubElement(signal_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name')
+                signal_name_elem = ET.SubElement(signal_elem, '{http://www.accellera.org/IPXACT/1685-2014}name')
                 signal_name_elem.text = signal['name']
                 
                 # 添加signal width
-                width_elem = ET.SubElement(signal_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}width')
+                width_elem = ET.SubElement(signal_elem, '{http://www.accellera.org/IPXACT/1685-2014}width')
                 width_elem.text = str(signal['width'])
                 
                 # 添加signal presence
                 if 'presence' in signal:
-                    presence_elem = ET.SubElement(signal_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}presence')
+                    presence_elem = ET.SubElement(signal_elem, '{http://www.accellera.org/IPXACT/1685-2014}presence')
                     presence_elem.text = signal['presence']
                 
                 # 添加signal driver
                 if 'driver' in signal:
-                    driver_elem = ET.SubElement(signal_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}driver')
+                    driver_elem = ET.SubElement(signal_elem, '{http://www.accellera.org/IPXACT/1685-2014}driver')
                     driver_elem.text = signal['driver']
             
             # 创建XML树
@@ -410,58 +572,58 @@ class IPXactWriter:
             
             # 添加命名空间
             abstract_root.set('xmlns:xsi', 'http://www.w3.org/2001/XMLSchema-instance')
-            abstract_root.set('xsi:schemaLocation', 'http://www.accellera.org/XMLSchema/IPXACT/1685-2014 http://www.accellera.org/XMLSchema/IPXACT/1685-2014/index.xsd')
+            abstract_root.set('xsi:schemaLocation', 'http://www.accellera.org/IPXACT/1685-2014 http://www.accellera.org/XMLSchema/IPXACT/1685-2014/index.xsd')
             
             # 添加vendor
-            abstract_vendor_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}vendor')
+            abstract_vendor_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/IPXACT/1685-2014}vendor')
             abstract_vendor_elem.text = busdef_data['vendor']
             
             # 添加library
-            abstract_library_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}library')
+            abstract_library_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/IPXACT/1685-2014}library')
             abstract_library_elem.text = busdef_data['library']
             
             # 添加name
-            abstract_name_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name')
+            abstract_name_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/IPXACT/1685-2014}name')
             abstract_name_elem.text = f"{busdef_data['name']}_abstract"
             
             # 添加version
-            abstract_version_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}version')
+            abstract_version_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/IPXACT/1685-2014}version')
             abstract_version_elem.text = busdef_data['version']
             
             # 添加description
-            abstract_description_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}description')
+            abstract_description_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/IPXACT/1685-2014}description')
             abstract_description_elem.text = f"Abstract bus definition for {busdef_data['name']}"
             
             # 添加busRef，引用对应的busDefinition
-            bus_ref_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}busRef')
+            bus_ref_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/IPXACT/1685-2014}busRef')
             bus_ref_elem.set('vendor', busdef_data['vendor'])
             bus_ref_elem.set('library', busdef_data['library'])
             bus_ref_elem.set('name', busdef_data['name'])
             bus_ref_elem.set('version', busdef_data['version'])
             
             # 添加ports
-            ports_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}ports')
+            ports_elem = ET.SubElement(abstract_root, '{http://www.accellera.org/IPXACT/1685-2014}ports')
             
             # 添加每个port
             for signal in busdef_data['signals']:
-                port_elem = ET.SubElement(ports_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}port')
+                port_elem = ET.SubElement(ports_elem, '{http://www.accellera.org/IPXACT/1685-2014}port')
                 
                 # 添加logicalName
-                logical_name_elem = ET.SubElement(port_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}logicalName')
+                logical_name_elem = ET.SubElement(port_elem, '{http://www.accellera.org/IPXACT/1685-2014}logicalName')
                 logical_name_elem.text = signal['name']
                 
                 # 添加wire
-                wire_elem = ET.SubElement(port_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}wire')
+                wire_elem = ET.SubElement(port_elem, '{http://www.accellera.org/IPXACT/1685-2014}wire')
                 
                 # 添加onMaster
-                on_master_elem = ET.SubElement(wire_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}onMaster')
-                master_direction_elem = ET.SubElement(on_master_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}direction')
+                on_master_elem = ET.SubElement(wire_elem, '{http://www.accellera.org/IPXACT/1685-2014}onMaster')
+                master_direction_elem = ET.SubElement(on_master_elem, '{http://www.accellera.org/IPXACT/1685-2014}direction')
                 # 使用用户设置的Master方向
                 master_direction_elem.text = signal.get('master_direction', 'out')
                 
                 # 添加onSlave
-                on_slave_elem = ET.SubElement(wire_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}onSlave')
-                slave_direction_elem = ET.SubElement(on_slave_elem, '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}direction')
+                on_slave_elem = ET.SubElement(wire_elem, '{http://www.accellera.org/IPXACT/1685-2014}onSlave')
+                slave_direction_elem = ET.SubElement(on_slave_elem, '{http://www.accellera.org/IPXACT/1685-2014}direction')
                 # 使用用户设置的Slave方向
                 slave_direction_elem.text = signal.get('slave_direction', 'in')
             

@@ -102,33 +102,29 @@ class TerminalWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        
-        # 工具栏
-        toolbar = QHBoxLayout()
-        toolbar.setContentsMargins(5, 2, 5, 2)
-        
-        self.new_tab_btn = QPushButton('+')
-        self.new_tab_btn.clicked.connect(self.add_new_tab)
-        toolbar.addWidget(self.new_tab_btn)
-        
-        self.close_tab_btn = QPushButton('×')
-        self.close_tab_btn.clicked.connect(self.close_current_tab)
-        toolbar.addWidget(self.close_tab_btn)
-        
-        toolbar.addStretch()
-        
-        self.clear_btn = QPushButton('清屏')
-        self.clear_btn.clicked.connect(self.clear_terminal)
-        toolbar.addWidget(self.clear_btn)
-        
-        layout.addLayout(toolbar)
-        
+
         # 标签页
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabsClosable(True)
         self.tab_widget.tabCloseRequested.connect(self.close_tab)
         layout.addWidget(self.tab_widget)
-        
+
+        # 在标签栏右侧添加按钮
+        corner_widget = QWidget()
+        corner_layout = QHBoxLayout(corner_widget)
+        corner_layout.setContentsMargins(0, 0, 5, 0)
+
+        self.new_tab_btn = QPushButton('+')
+        self.new_tab_btn.setMaximumWidth(30)
+        self.new_tab_btn.clicked.connect(self.add_new_tab)
+        corner_layout.addWidget(self.new_tab_btn)
+
+        self.clear_btn = QPushButton('清屏')
+        self.clear_btn.clicked.connect(self.clear_terminal)
+        corner_layout.addWidget(self.clear_btn)
+
+        self.tab_widget.setCornerWidget(corner_widget, Qt.TopRightCorner)
+
         # 添加第一个终端
         self.add_new_tab()
         
@@ -156,11 +152,6 @@ class TerminalWidget(QWidget):
             self.stop_terminal_process()
             self.tab_widget.removeTab(index)
             
-    def close_current_tab(self):
-        """关闭当前标签"""
-        current_index = self.tab_widget.currentIndex()
-        self.close_tab(current_index)
-        
     def start_terminal_process(self):
         """启动终端进程"""
         if hasattr(self, 'process') and self.process:

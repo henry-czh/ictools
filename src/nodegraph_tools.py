@@ -1,5 +1,5 @@
 from contextlib import nullcontext
-from NodeGraphQt import BaseNode, NodeGraph, BaseNodeCircle, Port
+from NodeGraphQt import BaseNode, NodeGraph, BaseNodeCircle, Port, BackdropNode as NodeGraphQtBackdropNode
 from Qt.QtGui import QColor, QPainter, QPen, QPainterPath
 from Qt.QtCore import Qt, QPointF
 import math
@@ -499,6 +499,12 @@ class CircleNodeOut(BaseNodeCircle):
         super(CircleNodeOut, self).__init__()
         self.port_name = "out"
         self.set_property('color', (200, 100, 50))
+        self.width = 1
+        self.port_type = 'signal'
+        self.bus_def = None
+        self.bus_name = ''
+        self.bus_mode = ''
+        self.bus_map = []
         self.add_input(self.port_name, display_name=False)
 
     def set_port_name(self, port_name):
@@ -519,6 +525,12 @@ class CircleNodeIn(BaseNodeCircle):
     def __init__(self):
         super(CircleNodeIn, self).__init__()
         self.set_property('color', (200, 100, 50))
+        self.width = 1
+        self.port_type = 'signal'
+        self.bus_def = None
+        self.bus_name = ''
+        self.bus_mode = ''
+        self.bus_map = []
         self.add_output(self.PORT_NAME, display_name=False)
     
     def set_port_name(self, port_name):
@@ -613,9 +625,9 @@ def make_template_node(serialized_data, template_name, node_data=None):
             if bus_name:
                 mode = bus_interface.get('mode', 'master')
                 if mode == 'master':
-                    self.add_input(bus_name, painter_func=bus_port_painter)
-                elif mode == 'slave':
                     self.add_output(bus_name, painter_func=bus_port_painter)
+                elif mode == 'slave':
+                    self.add_input(bus_name, painter_func=bus_port_painter)
 
     attrs = {
         '__identifier__': 'user',
@@ -631,3 +643,62 @@ def make_template_node(serialized_data, template_name, node_data=None):
     )
 
     return TemplateNode
+
+
+# 创建自定义 BackdropNode 类，支持节点整体移动
+def create_backdrop_node_class():
+    """动态创建支持整体移动的 BackdropNode 类"""
+    try:
+        BaseBackdropNode = NodeGraphQtBackdropNode
+        
+        class MovableBackdropNode(BaseBackdropNode):
+            """
+            自定义 BackdropNode，支持节点整体移动
+            """
+            def __init__(self):
+                super().__init__()
+                self._child_nodes = []  # 存储子节点列表
+                self._last_pos = None   # 记录上一次位置
+            
+            def wrap_nodes(self, nodes):
+                """
+                包裹节点到 backdrop 中
+                
+                Args:
+                    nodes: 要包裹的节点列表
+                """
+                super().wrap_nodes(nodes)
+                self._child_nodes = nodes
+                self._last_pos = self.pos()
+            
+            def set_pos(self, x, y):
+                """
+                重写 set_pos 方法，当 backdrop 移动时同步移动所有子节点
+                """
+                # 调用父类方法设置位置
+                super().set_pos(x, y)
+                
+                # 如果有子节点且位置发生了变化，则同步移动子节点
+                if self._child_nodes and self._last_pos is not None:
+                    dx = x - self._last_pos[0]
+                    dy = y - self._last_pos[1]
+                    
+                    # 移动所有子节点
+                    for node in self._child_nodes:
+                        node_pos = node.pos()
+                        if isinstance(node_pos, (list, tuple)):
+                            node.set_pos(node_pos[0] + dx, node_pos[1] + dy)
+                        else:
+                            node.set_pos(node_pos.x() + dx, node_pos.y() + dy)
+                
+                # 更新上一次位置
+                self._last_pos = (x, y)
+        
+        return MovableBackdropNode
+    except ImportError as e:
+        print(f"无法导入 BackdropNode: {e}")
+        return None
+
+
+# 导出 BackdropNode（如果可用）
+BackdropNode = create_backdrop_node_class()

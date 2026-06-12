@@ -23,36 +23,33 @@ module {{ module_name }}{% if parameters %} #(
 {%- endfor %}
 {%- endif %}
 );
-
 {% if internal_wires %}
     // Internal wires
 {%- for wire in internal_wires %}
     wire {{ "[%s:0]" % (wire.width - 1) if wire.width > 1 else "" }} {{ wire.name }};
 {%- endfor %}
-
 {% endif %}
-{% if instances %}
+{%- if instances %}
     // Component instances
 {%- for instance in instances %}
-    {{ instance.module_name }}{% if instance.parameters %} #(
+    {{ instance.module_name }}{%- if instance.parameters %} #(
 {%- for param in instance.parameters %}
-        .{{ param.name }}({{ param.value }}){{ "," if not loop.last else "" }}
+        .{{ param.name }}({{ param.value }}){{ "," if not loop.last else ")" }}
 {%- endfor %}
-{% endif %} {{ instance.instance_name }} (
+{%- endif %}
+    {{ instance.instance_name }} (
 {%- if instance.port_connections %}
 {%- for conn in instance.port_connections %}
-        .{{ conn.port_name }}({{ conn.signal_name }}){{ "," if not loop.last else "" }}
+        .{{ conn.port_name }}({{ conn.signal_name }}){{ "," if not loop.last else ");" }}
 {%- endfor %}
-{% endif %}
-    );
-{%- endfor %}
+{%- endif %}
+{% endfor %}
+{%- endif %} 
 
-{% endif %}
-{% if connections %}
+{%- if connections %}
     // Connections
 {%- for conn in connections %}
     assign {{ conn.target }} = {{ conn.source }};
 {%- endfor %}
-
 {% endif %}
 endmodule

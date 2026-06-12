@@ -19,11 +19,5 @@
             <ns0:presence>required</ns0:presence>
             <ns0:driver>any</ns0:driver>
         </ns0:signalDefinition>
-        <ns0:signalDefinition>
-            <ns0:name>signal_3</ns0:name>
-            <ns0:width>32</ns0:width>
-            <ns0:presence>required</ns0:presence>
-            <ns0:driver>any</ns0:driver>
-        </ns0:signalDefinition>
     </ns0:signalDefinitions>
 </ns0:busDefinition>

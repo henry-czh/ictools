@@ -1,21 +1,22 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QTableWidget, QHeaderView, QHBoxLayout,
-                    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QGroupBox, QLabel, QLineEdit, QGridLayout, QFileDialog, QMessageBox)
+                    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QGroupBox, QLabel, QLineEdit, QGridLayout, QFileDialog, QMessageBox, QSplitter)
 from PyQt5.QtCore import Qt
 
 class PortInfoDialog(QDialog):
     """端口信息显示对话框"""
-    def __init__(self, node_name, ports_info, parent=None, graph=None):
+    def __init__(self, node_name, ports_info, parent=None, graph=None, parameters=None):
         super().__init__(parent)
         self.setWindowTitle(f"端口连线 - {node_name}")
-        self.setGeometry(100, 100, 700, 400)
+        self.setGeometry(100, 100, 700, 500)
 
-
+        self.node_name = node_name
         self.graph = graph
+        self.parameters = parameters or []
 
         # 创建布局
         layout = QVBoxLayout(self)
 
-        # 创建表格
+        # 创建端口表格
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["端口名称", "类型", "连接模块", "连接端口"])
@@ -30,11 +31,36 @@ class PortInfoDialog(QDialog):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
 
+        # 创建Parameter表格
+        self.param_group = QGroupBox("模块参数设置")
+        param_layout = QVBoxLayout()
+
+        self.param_table = QTableWidget()
+        self.param_table.setColumnCount(3)
+        self.param_table.setHorizontalHeaderLabels(["参数名称", "默认值", "实例化值"])
+        self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.param_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.param_table.setAlternatingRowColors(True)
+
+        # 填充parameter信息
+        self.fill_param_info()
+
+        param_layout.addWidget(self.param_table)
+        self.param_group.setLayout(param_layout)
+
+        # 使用Splitter分隔param_group和端口表格，比例2:8
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self.param_group)
+        splitter.addWidget(self.table)
+        splitter.setStretchFactor(0, 2)  # param_group占2份
+        splitter.setStretchFactor(1, 8)  # 端口table占8份
+
         # 填充端口信息
         self.fill_port_info(ports_info)
 
         # 添加到布局
-        layout.addWidget(self.table)
+        layout.addWidget(splitter)
 
         # 添加按钮布局
         button_layout = QHBoxLayout()
@@ -58,6 +84,48 @@ class PortInfoDialog(QDialog):
         button_layout.addWidget(close_button)
 
         layout.addLayout(button_layout)
+
+    def fill_param_info(self):
+        """填充parameter信息到表格"""
+        self.param_table.setRowCount(len(self.parameters))
+
+        for row, param in enumerate(self.parameters):
+            param_name = param.get('name', 'Unknown')
+            default_value = param.get('default_value', '')
+            current_value = param.get('value', default_value)
+
+            # 参数名称（只读）
+            name_item = QTableWidgetItem(param_name)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            name_item.setTextAlignment(Qt.AlignVCenter)
+            self.param_table.setItem(row, 0, name_item)
+
+            # 默认值（只读）
+            default_item = QTableWidgetItem(str(default_value))
+            default_item.setFlags(default_item.flags() & ~Qt.ItemIsEditable)
+            default_item.setTextAlignment(Qt.AlignVCenter)
+            self.param_table.setItem(row, 1, default_item)
+
+            # 当前值（可编辑）
+            value_item = QTableWidgetItem(str(current_value))
+            value_item.setTextAlignment(Qt.AlignVCenter)
+            self.param_table.setItem(row, 2, value_item)
+
+    def get_parameters(self):
+        """获取用户修改后的parameter值"""
+        result = []
+        for row in range(self.param_table.rowCount()):
+            name_item = self.param_table.item(row, 0)
+            default_item = self.param_table.item(row, 1)
+            value_item = self.param_table.item(row, 2)
+            if name_item and value_item:
+                param = {
+                    'name': name_item.text(),
+                    'default_value': default_item.text() if default_item else '',
+                    'value': value_item.text()
+                }
+                result.append(param)
+        return result
 
     def get_all_node_names(self):
         """获取当前graph上的所有节点名称"""
@@ -664,6 +732,12 @@ class PortInfoDialog(QDialog):
                     target_port = target_node.inputs().get(connected_port_name)
                     if target_port and port:
                         port.connect_to(target_port)
+
+        # 更新节点的parameters
+        if hasattr(current_node, 'component_data') and current_node.component_data:
+            modified_params = self.get_parameters()
+            if modified_params:
+                current_node.component_data['parameters'] = modified_params
 
         QMessageBox.information(self, "信息", "保存成功！")
         self.accept()

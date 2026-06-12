@@ -507,7 +507,7 @@ class NewComponentDialog(QDialog):
                                                     # 去除可能的等号
                                                     default_val = default_val.split('=')[1].strip()
 
-                                                parameters.append({"name": param_name, "type": param_type, "default": default_val})
+                                                parameters.append({"name": param_name, "type": param_type, "default_value": default_val})
                 
                 # 然后尝试从模块体中提取localparam
                 if hasattr(top_module, 'members'):
@@ -527,7 +527,7 @@ class NewComponentDialog(QDialog):
                                                 # 去除可能的等号
                                                 default_val = default_val.split('=')[1].strip()
 
-                                            defines.append({"name": param_name, "type": param_type, "default": default_val})
+                                            defines.append({"name": param_name, "type": param_type, "default_value": default_val})
             except Exception as e:
                 import traceback
                 traceback.print_exc()
@@ -690,7 +690,7 @@ class NewComponentDialog(QDialog):
                     self.parameter_table.setItem(row, 0, QTableWidgetItem(param["name"]))
                     self.parameter_table.setItem(row, 1, QTableWidgetItem(param["type"]))
                     # 使用safe_eval计算parameter值（处理数学运算）
-                    param_value = self.safe_eval(str(param["default"]))
+                    param_value = self.safe_eval(str(param["default_value"]))
                     self.parameter_table.setItem(row, 2, QTableWidgetItem(param_value))
             
             # 8. 添加localparameter信息到表格（现在可以引用parameter了）
@@ -701,7 +701,7 @@ class NewComponentDialog(QDialog):
                     self.localparameter_table.setItem(row, 0, QTableWidgetItem(define["name"]))
                     self.localparameter_table.setItem(row, 1, QTableWidgetItem(define["type"]))
                     # 使用safe_eval计算localparameter值（处理parameter替换和数学运算）
-                    define_value = self.safe_eval(str(define["default"]))
+                    define_value = self.safe_eval(str(define["default_value"]))
                     self.localparameter_table.setItem(row, 2, QTableWidgetItem(define_value))
             
             # 9. 添加port信息到表格
@@ -1383,7 +1383,7 @@ class NewComponentDialog(QDialog):
             component_data['defines'].append({
                 'name': define_name,
                 'type': define_type,
-                'default': define_default
+                'default_value': define_default
             })
         
         # 收集parameter信息
@@ -1408,7 +1408,7 @@ class NewComponentDialog(QDialog):
             component_data['parameters'].append({
                 'name': param_name,
                 'type': param_type,
-                'default': param_default
+                'default_value': param_default
             })
         
         # 选择保存文件路径
@@ -1829,7 +1829,7 @@ class NewComponentDialog(QDialog):
             define_type = self.localparameter_table.item(i, 1).text().strip()
             define_value = self.localparameter_table.item(i, 2).text().strip()
             if define_name:
-                defines.append({"name": define_name, "type": define_type, "default": define_value})
+                defines.append({"name": define_name, "type": define_type, "default_value": define_value})
         
         # 收集Parameter信息
         parameters = []
@@ -1842,7 +1842,7 @@ class NewComponentDialog(QDialog):
             param_type = self.parameter_table.item(i, 1).text().strip()
             param_default = self.parameter_table.item(i, 2).text().strip()
             if param_name:
-                parameters.append({"name": param_name, "type": param_type, "default": param_default})
+                parameters.append({"name": param_name, "type": param_type, "default_value": param_default})
         
         # 收集Port信息
         ports = []
@@ -1971,7 +1971,7 @@ class NewComponentDialog(QDialog):
             self.localparameter_table.setItem(i, 0, QTableWidgetItem(define.get('name', '')))
             self.localparameter_table.setItem(i, 1, QTableWidgetItem(define.get('type', 'int')))
             # 使用safe_eval计算公式
-            default_value = self.safe_eval(str(define.get('default', '')))
+            default_value = self.safe_eval(str(define.get('default_value', '')))
             self.localparameter_table.setItem(i, 2, QTableWidgetItem(default_value))
             # 添加删除按钮
             delete_button = QPushButton()
@@ -2000,7 +2000,7 @@ class NewComponentDialog(QDialog):
             self.parameter_table.setItem(i, 0, QTableWidgetItem(param.get('name', '')))
             self.parameter_table.setItem(i, 1, QTableWidgetItem(param.get('type', 'int')))
             # 使用safe_eval计算公式
-            default_value = self.safe_eval(str(param.get('default', '')))
+            default_value = self.safe_eval(str(param.get('default_value', '')))
             self.parameter_table.setItem(i, 2, QTableWidgetItem(default_value))
             # 添加删除按钮
             delete_button = QPushButton()
@@ -2047,8 +2047,12 @@ class NewComponentDialog(QDialog):
             
             # Bus Type下拉菜单
             bus_type_combo = QComboBox()
-            bus_type_combo.addItems(["amba4.axi4", "amba4.apb", "amba4.ahb"])
-            bus_type_combo.setCurrentText(bus_interface.get('bus_type', 'amba4.axi4'))
+            default_types = ["amba4.axi4", "amba4.apb", "amba4.ahb"]
+            bus_type_value = bus_interface.get('bus_type', 'amba4.axi4')
+            bus_type_combo.addItems(default_types)
+            if bus_type_value not in default_types:
+                bus_type_combo.addItem(bus_type_value)
+            bus_type_combo.setCurrentText(bus_type_value)
             self.bus_interface_table.setCellWidget(i, 1, bus_type_combo)
             
             # 初始化该bus interface的port map信息字典

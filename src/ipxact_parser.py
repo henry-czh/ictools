@@ -1,5 +1,6 @@
 import xml.etree.ElementTree as ET
 import os
+import json
 
 class IPXactParser:
     def __init__(self):
@@ -115,19 +116,22 @@ class IPXactParser:
                 for param_elem in parameters:
                     param = {
                         'name': '',
-                        'default': ''
+                        'type': 'int',
+                        'default_value': ''
                     }
-                    
-                    # 提取parameter名称
+
                     param_name_elem = param_elem.find('.//ipxact:name', namespaces=ns)
                     if param_name_elem is not None:
                         param['name'] = param_name_elem.text
-                    
-                    # 提取parameter值
+
+                    param_type_elem = param_elem.find('.//ipxact:dataType', namespaces=ns)
+                    if param_type_elem is not None:
+                        param['type'] = param_type_elem.text
+
                     param_value_elem = param_elem.find('.//ipxact:value', namespaces=ns)
                     if param_value_elem is not None:
-                        param['default'] = param_value_elem.text
-                    
+                        param['default_value'] = param_value_elem.text
+
                     component['parameters'].append(param)
                 
                 # 提取localParameters
@@ -135,19 +139,22 @@ class IPXactParser:
                 for local_param_elem in local_parameters:
                     local_param = {
                         'name': '',
-                        'default': ''
+                        'type': 'int',
+                        'default_value': ''
                     }
-                    
-                    # 提取localParameter名称
+
                     local_param_name_elem = local_param_elem.find('.//ipxact:name', namespaces=ns)
                     if local_param_name_elem is not None:
                         local_param['name'] = local_param_name_elem.text
-                    
-                    # 提取localParameter值
+
+                    local_param_type_elem = local_param_elem.find('.//ipxact:dataType', namespaces=ns)
+                    if local_param_type_elem is not None:
+                        local_param['type'] = local_param_type_elem.text
+
                     local_param_value_elem = local_param_elem.find('.//ipxact:value', namespaces=ns)
                     if local_param_value_elem is not None:
-                        local_param['default'] = local_param_value_elem.text
-                    
+                        local_param['default_value'] = local_param_value_elem.text
+
                     component['defines'].append(local_param)
                 
                 # 提取busInterfaces
@@ -254,7 +261,7 @@ class IPXactParser:
             signals = []
             signal_elems = root.findall(".//{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}port")
             for signal_elem in signal_elems:
-                signal_name_elem = signal_elem.find(".//{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}logicalName")
+                signal_name_elem = signal_elem.find(".//{http://www.accellera.org/IPXACT/1685-2014}logicalName")
                 if signal_name_elem is not None:
                     signals.append(signal_name_elem.text)
             
@@ -284,8 +291,8 @@ class IPXactParser:
                             signals.append(logical_name_elem.text)
                 elif 'busDefinition' in root.tag:
                     # 从bus definition文件中提取信号
-                    for signal_def_elem in root.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}signalDefinition'):
-                        for name_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name'):
+                    for signal_def_elem in root.iter('{http://www.accellera.org/IPXACT/1685-2014}signalDefinition'):
+                        for name_elem in signal_def_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}name'):
                             signals.append(name_elem.text)
                 
                 return signals
@@ -305,24 +312,24 @@ class IPXactParser:
             # 检查是否是abstract bus definition文件
             if 'abstractionDefinition' in root.tag:
                 # 查找与当前信号匹配的port
-                for port_elem in root.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}port'):
-                    for logical_name_elem in port_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}logicalName'):
+                for port_elem in root.iter('{http://www.accellera.org/IPXACT/1685-2014}port'):
+                    for logical_name_elem in port_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}logicalName'):
                         if logical_name_elem.text == signal:
                             # 读取port方向
-                            for wire_elem in port_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}wire'):
+                            for wire_elem in port_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}wire'):
                                 if mode == "master":
-                                    for on_master_elem in wire_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}onMaster'):
-                                        for direction_elem in on_master_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}direction'):
+                                    for on_master_elem in wire_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}onMaster'):
+                                        for direction_elem in on_master_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}direction'):
                                             port_direction = direction_elem.text
                                 elif mode == "slave":
-                                    for on_slave_elem in wire_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}onSlave'):
-                                        for direction_elem in on_slave_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}direction'):
+                                    for on_slave_elem in wire_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}onSlave'):
+                                        for direction_elem in on_slave_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}direction'):
                                             port_direction = direction_elem.text
             
             # 尝试从bus definition文件中读取port位宽和方向
             # 查找对应的bus definition文件
             bus_ref_found = False
-            for bus_ref_elem in root.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}busRef'):
+            for bus_ref_elem in root.iter('{http://www.accellera.org/IPXACT/1685-2014}busRef'):
                 bus_ref_found = True
                 vendor = bus_ref_elem.get("vendor")
                 library = bus_ref_elem.get("library")
@@ -340,37 +347,37 @@ class IPXactParser:
                     bus_root = bus_tree.getroot()
                     
                     # 查找与当前信号匹配的signalDefinition
-                    for signal_def_elem in bus_root.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}signalDefinition'):
-                        for signal_name_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name'):
+                    for signal_def_elem in bus_root.iter('{http://www.accellera.org/IPXACT/1685-2014}signalDefinition'):
+                        for signal_name_elem in signal_def_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}name'):
                             if signal_name_elem.text == signal:
                                 # 读取port位宽
-                                for width_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}width'):
+                                for width_elem in signal_def_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}width'):
                                     port_width = width_elem.text
                                 # 如果还没有获取到方向，从bus definition文件中获取
                                 if not port_direction:
                                     if mode == "master":
-                                        for presence_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}presence'):
+                                        for presence_elem in signal_def_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}presence'):
                                             port_direction = presence_elem.text
                                     elif mode == "slave":
-                                        for driver_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}driver'):
+                                        for driver_elem in signal_def_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}driver'):
                                             port_direction = driver_elem.text
                 else:
                     print(f"bus definition文件不存在: {busdef_file_path}")
             # 如果当前文件就是bus definition文件，直接从中获取信息
             if not bus_ref_found and 'busDefinition' in root.tag:
                 # 查找与当前信号匹配的signalDefinition
-                for signal_def_elem in root.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}signalDefinition'):
-                    for signal_name_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name'):
+                for signal_def_elem in root.iter('{http://www.accellera.org/IPXACT/1685-2014}signalDefinition'):
+                    for signal_name_elem in signal_def_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}name'):
                         if signal_name_elem.text == signal:
                             # 读取port位宽
-                            for width_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}width'):
+                            for width_elem in signal_def_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}width'):
                                 port_width = width_elem.text
                             # 读取port方向
                             if mode == "master":
-                                for presence_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}presence'):
+                                for presence_elem in signal_def_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}presence'):
                                     port_direction = presence_elem.text
                             elif mode == "slave":
-                                for driver_elem in signal_def_elem.iter('{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}driver'):
+                                for driver_elem in signal_def_elem.iter('{http://www.accellera.org/IPXACT/1685-2014}driver'):
                                     port_direction = driver_elem.text
             
         except Exception as e:
@@ -393,13 +400,13 @@ class IPXactParser:
                     tree = ET.parse(file_path)
                     root = tree.getroot()
                     # 提取总线定义的名称
-                    name_elem = root.find(".//{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name")
+                    name_elem = root.find(".//{http://www.accellera.org/IPXACT/1685-2014}name")
                     if name_elem is not None:
                         # 检查是否是abstract bus definition文件，并且名称包含bus_type
-                        if root.tag == '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}abstractionDefinition' and bus_type in name_elem.text:
+                        if root.tag == '{http://www.accellera.org/IPXACT/1685-2014}abstractionDefinition' and bus_type in name_elem.text:
                             abstract_file = file_path
                         # 检查是否是bus definition文件，并且名称与bus_type完全匹配
-                        elif root.tag == '{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}busDefinition' and name_elem.text == bus_type:
+                        elif root.tag == '{http://www.accellera.org/IPXACT/1685-2014}busDefinition' and name_elem.text == bus_type:
                             bus_file = file_path
                 except Exception as e:
                     print(f"解析总线定义文件 {file_name} 时出错: {e}")
@@ -425,7 +432,7 @@ class IPXactParser:
                         tree = ET.parse(file_path)
                         root = tree.getroot()
                         # 提取总线定义的名称
-                        name_elem = root.find(".//{http://www.accellera.org/XMLSchema/IPXACT/1685-2014}name")
+                        name_elem = root.find(".//{http://www.accellera.org/IPXACT/1685-2014}name")
                         if name_elem is not None:
                             bus_defs.append(name_elem.text)
                     except Exception as e:
@@ -436,4 +443,24 @@ class IPXactParser:
             bus_defs = ["amba4.axi4", "amba4.apb", "amba4.ahb"]
         
         return bus_defs
-
+    
+    def parse_session_data_from_xml(self, file_path):
+        """从XML文件中解析session JSON数据"""
+        try:
+            # 解析XML文件
+            tree = ET.parse(file_path)
+            root = tree.getroot()
+            
+            # 查找visualizer扩展中的sessionData元素
+            viz_namespace = 'http://www.phytium.com/XMLSchema/visualizer/1.0'
+            session_data_elem = root.find(f".//{{{viz_namespace}}}sessionData")
+            
+            if session_data_elem is not None and session_data_elem.text:
+                # 解析JSON数据
+                session_data = json.loads(session_data_elem.text)
+                return session_data
+            
+            return None
+        except Exception as e:
+            print(f"从XML文件中解析session数据时出错: {e}")
+            return None

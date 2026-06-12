@@ -641,12 +641,20 @@ class IPXactVisualizer(QMainWindow):
     def on_node_double_clicked(self, node):
         """处理节点双击事件，显示端口信息"""
         node_name = node.name()
-        
+
+        if node.name() == "Output Ports":
+            return None
+
         # 获取节点的端口信息
         ports_info = self.get_node_ports_info(node)
-        
+
+        # 获取节点的parameters
+        parameters = []
+        if hasattr(node, 'component_data') and node.component_data:
+            parameters = node.component_data.get('parameters', [])
+
         # 打开端口信息对话框
-        dialog = PortInfoDialog(node_name, ports_info, self, self.graph)
+        dialog = PortInfoDialog(node_name, ports_info, self, self.graph, parameters)
         dialog.exec_()
     
     def get_node_ports_info(self, node):
@@ -1091,10 +1099,26 @@ class IPXactVisualizer(QMainWindow):
                 # 从graph_data中提取component_drag_count
                 if 'component_drag_count' in graph_data:
                     self.component_drag_count = graph_data['component_drag_count']
-                
+
                 self.graph.deserialize_session(graph_data)
-            else:
+
+            # 恢复节点的component_data
+            nodes_component_data = graph_data.get('nodes_component_data', {})
+            for node in self.graph.all_nodes():
+                node_name = node.name()
+                if node_name in nodes_component_data:
+                    node.component_data = nodes_component_data[node_name].get('component_data')
+            
+            # 恢复节点位置信息
+            node_positions = graph_data.get('node_positions', {})
+            if not self.graph.all_nodes():
                 QMessageBox.information(self, "提示", f"加载空graph: {graph_name}")
+            else:
+                for node in self.graph.all_nodes():
+                    node_name = node.name()
+                    if node_name in node_positions and hasattr(node, 'set_pos'):
+                        pos = node_positions[node_name]
+                        node.set_pos(pos['x'], pos['y'])
         except Exception as e:
             QMessageBox.critical(self, "错误", f"加载graph时出错: {str(e)}")
     
@@ -1437,67 +1461,10 @@ class IPXactVisualizer(QMainWindow):
             node_name = f"{component_name}_{version}"
             node_class_name = f"{node_name}_node"
             
-            # 重新注册节点类型，确保使用最新的组件信息
-            class DynamicComponentNode:
-                """动态组件节点"""
-                __identifier__ = "user"
-                __name__ = node_class_name
-                
-                def __init__(self):
-                    super(type(self), self).__init__()
-                    
-                    # 设置节点名称
-                    self.set_name(node_name)
-                    
-                    # 存储component数据
-                    self.component_data = component
-                    
-                    # 打印component数据
-                    
-                    # 构建端口映射
-                    port_directions = {}
-                    
-                    # 收集所有port map中的physical port
-                    mapped_physical_ports = set()
-                    for port_map in component.get('port_maps', []):
-                        physical_port = port_map.get('physical_port', '')
-                        if physical_port:
-                            mapped_physical_ports.add(physical_port)
-                    
-                    
-                    # 首先添加port表中的端口，但排除已经被映射的port
-                    for port in component.get('ports', []):
-                        port_name = port.get('name', 'Unknown')
-                        # 检查这个port是否已经被映射
-                        if port_name not in mapped_physical_ports:
-                            direction = port.get('direction', 'input')
-                            port_directions[port_name] = direction
-                    
-                    # 然后添加bus接口中的端口，根据master/slave映射方向
-                    for bus_interface in component.get('bus_interfaces', []):
-                        bus_name = bus_interface.get('name', '')
-                        mode = bus_interface.get('mode', 'master')
-                        # 根据mode映射方向
-                        if mode == 'master':
-                            port_directions[bus_name] = 'output'
-                        elif mode == 'slave':
-                            port_directions[bus_name] = 'input'
-                    
-                    
-                    # 根据端口映射创建输入和输出端口
-                    for port_name, direction in port_directions.items():
-                        if direction == 'input' or direction == 'inout':
-                            # input和inout端口都添加为输入
-                            self.add_input(port_name)
-                        if direction == 'output' or direction == 'inout':
-                            # output和inout端口都添加为输出
-                            self.add_output(port_name)
-            
             try:
-                # 检查节点类型是否已经注册过
                 node_identifier = f"user.{node_class_name}"
                 if node_identifier not in self.graph.registered_nodes():
-                    # 注册节点类型
+                    DynamicComponentNode = make_template_node(None, node_name, component)
                     self.graph.register_node(DynamicComponentNode)
             except Exception as e:
                 print(f"注册节点类型 {component_name} 失败: {e}")
@@ -1528,93 +1495,92 @@ class IPXactVisualizer(QMainWindow):
     def update_component_node(self, component_index, component_data):
         """更新工作区中指定component的节点"""
         if 0 <= component_index < len(self.components):
-            # 构建节点名称
             component_name = component_data.get('name', 'Unknown Component')
             version = component_data.get('version', '1.0').replace('.', '_')
             node_name = f"{component_name}_{version}"
             node_class_name = f"{node_name}_node"
-            
-            # 重新注册节点类型
-            # 定义动态节点类
-            class DynamicComponentNode:
-                """动态组件节点"""
-                __identifier__ = "user"
-                __name__ = node_class_name
-                
-                def __init__(self):
-                    super(type(self), self).__init__()
-                    
-                    # 设置节点名称
-                    self.set_name(node_name)
-                    
-                    # 存储component数据
-                    self.component_data = component_data
-                    
-                    # 打印component数据
-                    
-                    # 构建端口映射
-                    port_directions = {}
-                    
-                    # 收集所有port map中的physical port
-                    mapped_physical_ports = set()
-                    for port_map in component_data.get('port_maps', []):
-                        physical_port = port_map.get('physical_port', '')
-                        if physical_port:
-                            mapped_physical_ports.add(physical_port)
-                    
-                    
-                    # 首先添加port表中的端口，但排除已经被映射的port
-                    for port in component_data.get('ports', []):
-                        port_name = port.get('name', 'Unknown')
-                        # 检查这个port是否已经被映射
-                        if port_name not in mapped_physical_ports:
-                            direction = port.get('direction', 'input')
-                            port_directions[port_name] = direction
-                    
-                    # 然后添加bus接口中的端口，根据master/slave映射方向
-                    for bus_interface in component_data.get('bus_interfaces', []):
-                        bus_name = bus_interface.get('name', '')
-                        mode = bus_interface.get('mode', 'master')
-                        # 根据mode映射方向
-                        if mode == 'master':
-                            port_directions[bus_name] = 'output'
-                        elif mode == 'slave':
-                            port_directions[bus_name] = 'input'
-                    
-                    
-                    # 根据端口映射创建输入和输出端口
-                    for port_name, direction in port_directions.items():
-                        if direction == 'input' or direction == 'inout':
-                            # input和inout端口都添加为输入
-                            self.add_input(port_name)
-                        if direction == 'output' or direction == 'inout':
-                            # output和inout端口都添加为输出
-                            self.add_output(port_name)
-            
+
             try:
-                # 检查节点类型是否已经注册过
                 node_identifier = f"user.{node_class_name}"
                 if node_identifier not in self.graph.registered_nodes():
-                    # 注册节点类型
+                    DynamicComponentNode = make_template_node(None, node_name, component_data)
                     self.graph.register_node(DynamicComponentNode)
             except Exception as e:
                 print(f"注册节点类型 {component_name} 失败: {e}")
-            
-            # 更新工作区中的节点
-            for node in self.component_items:
-                # 检查节点是否是对应的component
+
+            # 更新工作区中的节点（遍历self.graph.all_nodes()以包含加载的节点）
+            for node in self.graph.all_nodes():
                 if hasattr(node, 'component_data'):
                     node_component_name = node.component_data.get('name', '')
                     node_component_version = node.component_data.get('version', '1.0')
                     if node_component_name == component_name and node_component_version == component_data.get('version', '1.0'):
-                        # 更新节点的数据
                         node.component_data = component_data
-                        
-                        # 这里可以添加更新节点端口的逻辑
-                        # 注意：具体的端口更新方法取决于您使用的图形库
-                        # 可能需要重新创建节点或调用特定的更新方法
+
+            # 检查所有saved_graphs中是否有使用该组件且数据不一致的情况
+            self._check_and_warn_outdated_graphs(component_name, component_data.get('version', '1.0'), component_data)
         else:
             print(f"无效的component索引: {component_index}")
+
+    def _check_and_warn_outdated_graphs(self, component_name, component_version, latest_component_data):
+        """检查所有saved_graphs中是否有使用该组件且数据不一致的graph"""
+        outdated_graphs = []
+
+        for graph_name, graph_data in self.saved_graphs:
+            nodes_component_data = graph_data.get('nodes_component_data', {})
+
+            # 检查是否有使用该组件的节点
+            for node_name, node_info in nodes_component_data.items():
+                node_component = node_info.get('component_data', {})
+                if node_component.get('name') == component_name and node_component.get('version') == component_version:
+                    # 比较 bus_interfaces 数据
+                    if not self._compare_bus_interfaces(node_component.get('bus_interfaces', []), latest_component_data.get('bus_interfaces', [])):
+                        outdated_graphs.append(graph_name)
+                        break
+                    # 比较 port_maps 数据
+                    if not self._compare_port_maps(node_component.get('port_maps', []), latest_component_data.get('port_maps', [])):
+                        if graph_name not in outdated_graphs:
+                            outdated_graphs.append(graph_name)
+                        break
+
+        if outdated_graphs:
+            outdated_list = "\n".join(f"- {name}" for name in outdated_graphs)
+            QMessageBox.warning(
+                self,
+                "警告",
+                f"组件 '{component_name}' 的数据已更新，以下保存的graph使用了旧数据：\n{outdated_list}\n\n"
+                f"请重新打开这些graph以加载最新数据，或手动更新。"
+            )
+
+    def _compare_bus_interfaces(self, old_bus_if, new_bus_if):
+        """比较bus_interfaces数据是否一致"""
+        if len(old_bus_if) != len(new_bus_if):
+            return False
+
+        for old, new in zip(old_bus_if, new_bus_if):
+            if old.get('name') != new.get('name'):
+                return False
+            if old.get('bus_type') != new.get('bus_type'):
+                return False
+            if old.get('mode') != new.get('mode'):
+                return False
+            # 比较 port_maps
+            if not self._compare_port_maps(old.get('port_maps', []), new.get('port_maps', [])):
+                return False
+
+        return True
+
+    def _compare_port_maps(self, old_pm, new_pm):
+        """比较port_maps数据是否一致"""
+        if len(old_pm) != len(new_pm):
+            return False
+
+        for old, new in zip(old_pm, new_pm):
+            if old.get('logical_port') != new.get('logical_port'):
+                return False
+            if old.get('physical_port') != new.get('physical_port'):
+                return False
+
+        return True
     
     def on_workspace_drag_enter(self, event):
         if self.project_panel.currentItem() is None:
@@ -2047,9 +2013,36 @@ class IPXactVisualizer(QMainWindow):
             
             # 序列化当前graph状态
             graph_data = self.graph.serialize_session()
-            
+
             # 将component_drag_count添加到graph_data中
             graph_data['component_drag_count'] = self.component_drag_count
+
+            # 收集所有节点的component_data
+            nodes_component_data = {}
+            for node in self.graph.all_nodes():
+                if hasattr(node, 'component_data') and node.component_data:
+                    node_name = node.name()
+                    node_type = node.__class__.__name__
+                    component_data = node.component_data
+
+                    # 如果节点的component_data缺少bus_interfaces或port_maps，从self.components获取最新数据
+                    if not component_data.get('bus_interfaces'):
+                        node_type_base = node_type[5:-5] if node_type.startswith('user.') and node_type.endswith('_node') else ''
+                        if node_type_base:
+                            parts = node_type_base.rsplit('_', 1)
+                            if len(parts) == 2:
+                                comp_name = parts[0]
+                                version = parts[1].replace('_', '.')
+                                for comp in self.components:
+                                    if comp.get('name') == comp_name and comp.get('version') == version:
+                                        component_data = comp
+                                        break
+
+                    nodes_component_data[node_name] = {
+                        'component_data': component_data,
+                        'node_type': node_type
+                    }
+            graph_data['nodes_component_data'] = nodes_component_data
             
             # 更新存储的graph状态
             graph_name = self.saved_graphs[self.current_project_index][0]
@@ -2082,11 +2075,14 @@ class IPXactVisualizer(QMainWindow):
             
             self.saved_graphs[self.current_project_index] = (graph_name, graph_data)
             
-            # 保存graph数据到本地文件
-            self.save_graph_to_file(graph_name, graph_data)
-            
-            # 生成Verilog代码到指定文件
+            # 获取verilog_file路径
             verilog_file = graph_data.get('verilog_file', '')
+            
+            # 保存graph数据到本地文件（IP-XACT XML格式）
+            # 如果指定了verilog_file，会同时在Verilog目录生成一份XML
+            self.save_graph_to_file(graph_name, graph_data, verilog_file=verilog_file)
+            
+            # 生成Verilog代码到指定文件（如果指定了verilog_file）
             if verilog_file:
                 self.generate_verilog_code(verilog_file, graph_data)
             
@@ -2094,32 +2090,111 @@ class IPXactVisualizer(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"保存graph时出错: {str(e)}")
     
-    def save_graph_to_file(self, graph_name, graph_data):
-        """将graph数据保存到本地文件"""
+    def save_graph_to_file(self, graph_name, graph_data, custom_path=None, verilog_file=None):
+        """将graph数据保存到本地XML文件（IP-XACT格式）
+        
+        Args:
+            graph_name: graph名称（用于生成默认文件名）
+            graph_data: 完整的graph数据
+            custom_path: 可选的自定义输出路径，如果提供则使用该路径
+            verilog_file: 可选的Verilog文件路径，如果提供则同时在该目录生成XML文件
+        """
         try:
-            # 获取projects目录路径
-            projects_dir = os.path.join(os.path.expanduser("~"), ".config", "ipxact_visualizer", "projects")
+            # 确定输出文件路径
+            if custom_path:
+                # 使用自定义路径（用于与Verilog文件同目录）
+                file_path = custom_path
+            else:
+                # 默认路径：~/.config/ipxact_visualizer/projects/
+                projects_dir = os.path.join(os.path.expanduser("~"), ".config", "ipxact_visualizer", "projects")
+                if not os.path.exists(projects_dir):
+                    os.makedirs(projects_dir)
+                safe_name = graph_name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+                file_path = os.path.join(projects_dir, f"{safe_name}.xml")
             
-            # 创建projects目录
-            if not os.path.exists(projects_dir):
-                os.makedirs(projects_dir)
+            # 如果指定了verilog_file，还需要在Verilog目录生成一份XML
+            verilog_xml_path = None
+            if verilog_file:
+                verilog_xml_path = os.path.splitext(verilog_file)[0] + '.xml'
             
-            # 生成安全的文件名
-            safe_name = graph_name.replace(" ", "_").replace("/", "_").replace("\\", "_")
-            file_path = os.path.join(projects_dir, f"{safe_name}.json")
+            # 收集节点位置信息
+            node_positions = {}
+            try:
+                if hasattr(self.graph, 'all_nodes'):
+                    for node in self.graph.all_nodes():
+                        try:
+                            # 尝试使用 scenePos() 获取节点位置（NodeGraphQt中推荐的方式）
+                            scene_pos = node.scenePos()
+                            node_positions[node.name()] = {'x': scene_pos.x(), 'y': scene_pos.y()}
+                        except Exception:
+                            # 如果 scenePos() 失败，尝试 pos()
+                            try:
+                                pos = node.pos()
+                                if isinstance(pos, list) or isinstance(pos, tuple):
+                                    node_positions[node.name()] = {'x': pos[0], 'y': pos[1]}
+                                elif hasattr(pos, 'x') and hasattr(pos, 'y'):
+                                    node_positions[node.name()] = {'x': pos.x(), 'y': pos.y()}
+                            except Exception:
+                                pass
+            except Exception as e:
+                print(f"收集节点位置信息时出错: {e}")
             
-            # 保存graph数据
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "name": graph_name,
-                    "data": graph_data
-                }, f, ensure_ascii=False, indent=4)
+            # 准备项目数据
+            project_data = {
+                'vendor': 'Phytium',
+                'library': 'interegrated',
+                'module_name': graph_data.get('module_name', 'UnknownModule'),
+                'version': graph_data.get('version', '1.0'),
+                'description': graph_data.get('description', ''),
+                'component_drag_count': graph_data.get('component_drag_count', 0),
+                'input_ports': [],
+                'output_ports': []
+            }
             
-            return True
+            # 获取nodes_component_data
+            nodes_component_data = graph_data.get('nodes_component_data', {})
+            
+            # 准备连接数据（转换为IP-XACT格式）
+            ipxact_connections = []
+            
+            # 从graph_data中获取连接信息
+            session_data = graph_data.get('session', {})
+            node_data = session_data.get('node_data', {})
+            
+            # 遍历节点数据，收集连接信息
+            for node_name, node_info in node_data.items():
+                outputs = node_info.get('outputs', {})
+                for output_name, connections in outputs.items():
+                    for conn in connections:
+                        target_node = conn.get('node')
+                        target_port = conn.get('port')
+                        
+                        if target_node and target_port:
+                            ipxact_connections.append({
+                                'source_instance': node_name,
+                                'source_port': output_name,
+                                'target_instance': target_node,
+                                'target_port': target_port
+                            })
+            
+            # 调用writer生成IP-XACT XML文件（传递完整的graph_data）
+            if self.writer.create_top_component_file(file_path, project_data, nodes_component_data, ipxact_connections, node_positions, graph_data):
+                print(f"Graph已保存为IP-XACT XML文件: {file_path}")
+            else:
+                print(f"保存Graph XML文件失败")
+            
+            # 如果指定了verilog_file，同时在Verilog目录生成一份XML文件
+            if verilog_xml_path and verilog_xml_path != file_path:
+                if self.writer.create_top_component_file(verilog_xml_path, project_data, nodes_component_data, ipxact_connections, node_positions, graph_data):
+                    print(f"IP-XACT XML文件已生成（与Verilog同目录）: {verilog_xml_path}")
+                else:
+                    print(f"生成Verilog同目录的XML文件失败")
+                
         except Exception as e:
-            print(f"保存graph数据到文件失败: {e}")
-            return False
-    
+            print(f"保存graph到文件时出错: {e}")
+            import traceback
+            traceback.print_exc()
+
     def generate_verilog_code(self, verilog_file, graph_data):
         """生成Verilog代码到指定文件"""
         try:
@@ -2186,36 +2261,39 @@ class IPXactVisualizer(QMainWindow):
             template_data['input_ports'] = input_ports
             template_data['output_ports'] = output_ports
             
+            # 从graph_data中获取保存的节点组件数据
+            nodes_component_data = graph_data.get('nodes_component_data', {})
+
             # 提取组件实例信息
             instance_id_map = {}
             for node_id, node_data in nodes.items():
                 node_type = node_data.get('type_', '')
-                
-                # 跳过CircleNodeIn和CircleNodeOut
-                if node_type in ['user.circle.CircleNodeIn', 'user.circle.CircleNodeOut']:
+
+                # 跳过CircleNodeIn和CircleNodeOut 和 BackdropNode
+                if node_type in ['user.circle.CircleNodeIn', 'user.circle.CircleNodeOut', 'nodeGraphQt.nodes.BackdropNode']:
                     continue
-                
+
                 # 从节点类型中提取组件名称
                 # 节点类型格式是"user.{component_name}_node"
                 if node_type.startswith('user.') and node_type.endswith('_node'):
                     component_name = node_type[5:-5]  # 去掉"user."和"_node"
                 else:
                     component_name = 'UnknownComponent'
-                
+
                 instance_name = node_data.get('name', f'inst_{node_id}')
-                
+
                 # 记录实例ID映射
                 instance_id_map[node_id] = instance_name
-                
-                # 从self.components中查找组件信息
+
+                # 从nodes_component_data中查找组件信息
                 component_data = None
-                for comp in self.components:
-                    if comp.get('name') == component_name:
-                        component_data = comp
+                for node_name, node_info in nodes_component_data.items():
+                    if node_name == instance_name:
+                        component_data = node_info.get('component_data')
                         break
-                
+
                 if not component_data:
-                    print(f"警告: 找不到组件 {component_name} 的信息")
+                    print(f"警告: 找不到组件 {component_name} 的信息, instance_name:{instance_name},node name:{node_name}")
                     continue
                 
                 # 提取组件的参数
@@ -2223,7 +2301,7 @@ class IPXactVisualizer(QMainWindow):
                 for param in component_data.get('parameters', []):
                     instance_params.append({
                         'name': param.get('name', 'UnknownParam'),
-                        'value': param.get('default_value', '0')
+                        'value': param.get('value', param.get('default_value', '0'))
                     })
                 
                 # 提取组件的端口连接
@@ -2247,6 +2325,12 @@ class IPXactVisualizer(QMainWindow):
                 for port in component_data.get('ports', []):
                     port_name = port.get('name', 'UnknownPort')
                     port_width = port.get('width', 1)
+                    if isinstance(port_width, str):
+                        try:
+                            port_width = eval(port_width) if port_width else 1
+                        except:
+                            port_width = 1
+                    port_width = int(port_width) if port_width else 1
                     template_data['internal_wires'].append({
                         'name': f'{instance_name}_{port_name}',
                         'width': port_width
@@ -2254,6 +2338,11 @@ class IPXactVisualizer(QMainWindow):
             
             # 处理连接关系
             for conn in connections:
+                src_node_id = None
+                src_port = None
+                dst_node_id = None
+                dst_port = None
+
                 # 检查连接关系的格式
                 if 'source' in conn and 'target' in conn:
                     # 从session字段中提取的连接关系格式
@@ -2261,65 +2350,139 @@ class IPXactVisualizer(QMainWindow):
                     src_port = conn.get('source', {}).get('port', '')
                     dst_node_id = conn.get('target', {}).get('node', '')
                     dst_port = conn.get('target', {}).get('port', '')
-                    
-                    # 获取源节点和目标节点的数据
-                    src_node_data = nodes.get(src_node_id, {})
-                    dst_node_data = nodes.get(dst_node_id, {})
-                    
-                    src_node_name = src_node_data.get('name', f'node_{src_node_id}')
-                    dst_node_name = dst_node_data.get('name', f'node_{dst_node_id}')
                 elif 'source_node' in conn and 'target_node' in conn:
                     # 从我之前添加的connections字段中提取的连接关系格式
                     src_node_name = conn.get('source_node', '')
                     src_port = conn.get('source_port', '')
                     dst_node_name = conn.get('target_node', '')
                     dst_port = conn.get('target_port', '')
-                    
+
                     # 查找源节点和目标节点的ID
-                    src_node_id = None
-                    dst_node_id = None
                     for node_id, node_data in nodes.items():
                         if node_data.get('name') == src_node_name:
                             src_node_id = node_id
                         if node_data.get('name') == dst_node_name:
                             dst_node_id = node_id
-                    
+
                     if not src_node_id or not dst_node_id:
                         print(f"警告: 找不到节点 {src_node_name} 或 {dst_node_name}")
                         continue
-                    
-                    # 获取源节点和目标节点的数据
-                    src_node_data = nodes.get(src_node_id, {})
-                    dst_node_data = nodes.get(dst_node_id, {})
+                elif 'in' in conn and 'out' in conn:
+                    # NodeGraphQt的连接格式: {'in': [node_id, port_name], 'out': [node_id, port_name]}
+                    # 'out' 是源，'in' 是目标
+                    out_info = conn.get('out', [])
+                    in_info = conn.get('in', [])
+                    if len(out_info) >= 2 and len(in_info) >= 2:
+                        src_node_id = out_info[0]
+                        src_port = out_info[1]
+                        dst_node_id = in_info[0]
+                        dst_port = in_info[1]
                 else:
                     # 不支持的连接关系格式
                     print(f"警告: 不支持的连接关系格式: {conn}")
                     continue
-                
+
+                if not src_node_id or not dst_node_id:
+                    continue
+
+                # 获取源节点和目标节点的数据
+                src_node_data = nodes.get(src_node_id, {})
+                dst_node_data = nodes.get(dst_node_id, {})
+
+                src_node_name = src_node_data.get('name', f'node_{src_node_id}')
+                dst_node_name = dst_node_data.get('name', f'node_{dst_node_id}')
                 src_node_type = src_node_data.get('type_', '')
                 dst_node_type = dst_node_data.get('type_', '')
-                
-                # 确定源信号名称
-                if src_node_type == 'user.circle.CircleNodeIn':
-                    # 输入端口连接到实例
-                    src_signal = src_node_data.get('name', f'input_{src_node_id}')
+
+                # 检查是否是bus interface连接
+                src_component_data = nodes_component_data.get(src_node_name, {}).get('component_data', {})
+                dst_component_data = nodes_component_data.get(dst_node_name, {}).get('component_data', {})
+
+                src_bus_interfaces = src_component_data.get('bus_interfaces', [])
+                dst_bus_interfaces = dst_component_data.get('bus_interfaces', [])
+
+                # 查找源端口是否属于bus interface
+                src_bus_info = None
+                for bus_if in src_bus_interfaces:
+                    if bus_if.get('name') == src_port:
+                        src_bus_info = bus_if
+                        break
+
+                # 查找目标端口是否属于bus interface
+                dst_bus_info = None
+                for bus_if in dst_bus_interfaces:
+                    if bus_if.get('name') == dst_port:
+                        dst_bus_info = bus_if
+                        break
+
+                # 如果是bus interface连接，展开physical signal
+                if src_bus_info and dst_bus_info:
+                    src_port_maps = src_bus_info.get('port_maps', [])
+                    dst_port_maps = dst_bus_info.get('port_maps', [])
+
+                    # 建立logical port到physical port的映射
+                    src_logical_to_physical = {}
+                    for pm in src_port_maps:
+                        logical = pm.get('logical_port', '')
+                        physical = pm.get('physical_port', '')
+                        if logical and physical:
+                            src_logical_to_physical[logical] = physical
+
+                    dst_logical_to_physical = {}
+                    for pm in dst_port_maps:
+                        logical = pm.get('logical_port', '')
+                        physical = pm.get('physical_port', '')
+                        if logical and physical:
+                            dst_logical_to_physical[logical] = physical
+
+                    # 按logical port匹配连接
+                    for logical_port in src_logical_to_physical:
+                        if logical_port in dst_logical_to_physical:
+                            src_physical = src_logical_to_physical[logical_port]
+                            dst_physical = dst_logical_to_physical[logical_port]
+
+                            # 确定源信号名称
+                            if src_node_type == 'user.circle.CircleNodeIn':
+                                src_signal = src_node_name
+                            else:
+                                src_signal = f'{src_node_name}_{src_physical}'
+
+                            # 确定目标信号名称
+                            if dst_node_type == 'user.circle.CircleNodeOut':
+                                dst_signal = dst_node_name
+                            else:
+                                dst_signal = f'{dst_node_name}_{dst_physical}'
+
+                            # 添加连接
+                            template_data['connections'].append({
+                                'source': src_signal,
+                                'target': dst_signal
+                            })
+                            print(f"添加连接: {src_signal} -> {dst_signal}")
                 else:
-                    # 实例输出连接到其他
-                    src_signal = f'{src_node_name}_{src_port}'
-                
-                # 确定目标信号名称
-                if dst_node_type == 'user.circle.CircleNodeOut':
-                    # 实例输出连接到输出端口
-                    dst_signal = dst_node_data.get('name', f'output_{dst_node_id}')
-                else:
-                    # 实例输出连接到实例输入
-                    dst_signal = f'{dst_node_name}_{dst_port}'
-                
-                # 添加连接
-                template_data['connections'].append({
-                    'source': src_signal,
-                    'target': dst_signal
-                })
+                    print(f"处理普通端口连接: {src_node_name} -> {dst_node_name}")
+                    # 普通端口连接
+                    # 确定源信号名称
+                    if src_node_type == 'user.circle.CircleNodeIn':
+                        # 输入端口连接到实例
+                        src_signal = src_node_name
+                    else:
+                        # 实例输出连接到其他
+                        src_signal = f'{src_node_name}_{src_port}'
+
+                    # 确定目标信号名称
+                    if dst_node_type == 'user.circle.CircleNodeOut':
+                        # 实例输出连接到输出端口
+                        dst_signal = dst_node_name
+                    else:
+                        # 实例输出连接到实例输入
+                        dst_signal = f'{dst_node_name}_{dst_port}'
+
+                    # 添加连接
+                    template_data['connections'].append({
+                        'source': src_signal,
+                        'target': dst_signal
+                    })
             
             # 加载模板
             template_dir = os.path.dirname(__file__)
@@ -2336,9 +2499,203 @@ class IPXactVisualizer(QMainWindow):
         except Exception as e:
             import traceback
             traceback.print_exc()
-    
+
+    def load_graph_from_xml(self, xml_file_path):
+        """从IP-XACT XML文件加载graph数据"""
+        try:
+            # 首先尝试从XML中解析session JSON数据（新格式）
+            session_data = self.parser.parse_session_data_from_xml(xml_file_path)
+            if session_data:
+                print("从XML中加载到完整的session数据")
+                return session_data
+            
+            # 如果没有session数据，则使用原有的解析逻辑（兼容旧格式）
+            import xml.etree.ElementTree as ET
+            
+            # 定义命名空间
+            ns = {
+                'ipxact': 'http://www.accellera.org/XMLSchema/IPXACT/1685-2014',
+                'viz': 'http://www.phytium.com/XMLSchema/visualizer/1.0'
+            }
+            
+            # 解析XML文件
+            tree = ET.parse(xml_file_path)
+            root = tree.getroot()
+            
+            # 提取基本信息
+            vendor = root.find('.//ipxact:vendor', ns)
+            library = root.find('.//ipxact:library', ns)
+            name = root.find('.//ipxact:name', ns)
+            version = root.find('.//ipxact:version', ns)
+            description = root.find('.//ipxact:description', ns)
+            
+            # 提取可视化扩展信息
+            component_drag_count = {}
+            node_positions = {}
+            
+            viz_extension = root.find('.//ipxact:vendorExtensions/viz:visualizer', ns)
+            if viz_extension is not None:
+                drag_count_elem = viz_extension.find('.//viz:componentDragCount', ns)
+                if drag_count_elem is not None and drag_count_elem.text:
+                    try:
+                        # component_drag_count是字典，需要从JSON反序列化
+                        component_drag_count = json.loads(drag_count_elem.text)
+                    except (json.JSONDecodeError, ValueError):
+                        # 如果解析失败，尝试作为整数处理（兼容旧格式）
+                        try:
+                            component_drag_count = int(drag_count_elem.text)
+                        except ValueError:
+                            component_drag_count = {}
+                
+                # 提取节点位置信息
+                node_positions_elem = viz_extension.find('.//viz:nodePositions', ns)
+                if node_positions_elem is not None:
+                    for node_pos_elem in node_positions_elem.findall('.//viz:nodePosition', ns):
+                        node_name_elem = node_pos_elem.find('.//viz:nodeName', ns)
+                        x_elem = node_pos_elem.find('.//viz:x', ns)
+                        y_elem = node_pos_elem.find('.//viz:y', ns)
+                        
+                        if node_name_elem is not None and x_elem is not None and y_elem is not None:
+                            node_positions[node_name_elem.text] = {
+                                'x': float(x_elem.text),
+                                'y': float(y_elem.text)
+                            }
+            
+            # 提取端口信息
+            input_ports = []
+            output_ports = []
+            
+            ports = root.find('.//ipxact:ports', ns)
+            if ports is not None:
+                for port_elem in ports.findall('.//ipxact:port', ns):
+                    port_name_elem = port_elem.find('.//ipxact:name', ns)
+                    direction_elem = port_elem.find('.//ipxact:direction', ns)
+                    width_elem = port_elem.find('.//ipxact:wire/ipxact:width', ns)
+                    
+                    if port_name_elem is not None and direction_elem is not None:
+                        port_info = {
+                            'name': port_name_elem.text,
+                            'direction': direction_elem.text,
+                            'width': int(width_elem.text) if width_elem is not None else 1
+                        }
+                        
+                        if direction_elem.text == 'in':
+                            input_ports.append(port_info)
+                        elif direction_elem.text == 'out':
+                            output_ports.append(port_info)
+            
+            # 提取组件实例信息
+            nodes_component_data = {}
+            component_instances = root.find('.//ipxact:componentInstances', ns)
+            if component_instances is not None:
+                for instance_elem in component_instances.findall('.//ipxact:componentInstance', ns):
+                    instance_name_elem = instance_elem.find('.//ipxact:instanceName', ns)
+                    component_ref = instance_elem.find('.//ipxact:componentRef', ns)
+                    
+                    if instance_name_elem is not None and component_ref is not None:
+                        instance_name = instance_name_elem.text
+                        
+                        # 从componentRef获取component信息
+                        comp_vendor = component_ref.find('.//ipxact:vendor', ns)
+                        comp_library = component_ref.find('.//ipxact:library', ns)
+                        comp_name = component_ref.find('.//ipxact:name', ns)
+                        comp_version = component_ref.find('.//ipxact:version', ns)
+                        
+                        # 从self.components中查找完整的component数据
+                        component_data = {
+                            'vendor': comp_vendor.text if comp_vendor is not None else 'Phytium',
+                            'library': comp_library.text if comp_library is not None else 'interegrated',
+                            'name': comp_name.text if comp_name is not None else 'UnknownComponent',
+                            'version': comp_version.text if comp_version is not None else '1.0'
+                        }
+                        
+                        # 尝试从self.components获取完整数据
+                        if comp_name is not None and comp_version is not None:
+                            for comp in self.components:
+                                if comp.get('name') == comp_name.text and comp.get('version') == comp_version.text:
+                                    component_data = comp
+                                    break
+                        
+                        # 构建节点类型
+                        node_type = f"user.{component_data['name']}_{component_data['version'].replace('.', '_')}_node"
+                        
+                        nodes_component_data[instance_name] = {
+                            'component_data': component_data,
+                            'node_type': node_type
+                        }
+            
+            # 提取连接信息
+            connections = []
+            interconnections = root.find('.//ipxact:interconnections', ns)
+            if interconnections is not None:
+                for interconn_elem in interconnections.findall('.//ipxact:interconnection', ns):
+                    source = interconn_elem.find('.//ipxact:source', ns)
+                    destination = interconn_elem.find('.//ipxact:destination', ns)
+                    
+                    if source is not None and destination is not None:
+                        src_instance = source.find('.//ipxact:instanceName', ns)
+                        src_port = source.find('.//ipxact:portName', ns)
+                        dst_instance = destination.find('.//ipxact:instanceName', ns)
+                        dst_port = destination.find('.//ipxact:portName', ns)
+                        
+                        if src_instance is not None and src_port is not None and dst_instance is not None and dst_port is not None:
+                            connections.append({
+                                'source_instance': src_instance.text,
+                                'source_port': src_port.text,
+                                'target_instance': dst_instance.text,
+                                'target_port': dst_port.text
+                            })
+            
+            # 构建graph_data
+            graph_data = {
+                'vendor': vendor.text if vendor is not None else 'Phytium',
+                'library': library.text if library is not None else 'interegrated',
+                'module_name': name.text if name is not None else 'UnknownModule',
+                'version': version.text if version is not None else '1.0',
+                'description': description.text if description is not None else '',
+                'component_drag_count': component_drag_count,
+                'node_positions': node_positions,
+                'input_ports': input_ports,
+                'output_ports': output_ports,
+                'nodes_component_data': nodes_component_data,
+                'connections': connections,
+                # 为了兼容现有代码，添加session结构
+                'session': {
+                    'node_data': {}
+                }
+            }
+            
+            # 构建session.node_data结构（用于deserialize_session）
+            node_data = {}
+            for conn in connections:
+                src_instance = conn['source_instance']
+                src_port = conn['source_port']
+                dst_instance = conn['target_instance']
+                dst_port = conn['target_port']
+                
+                if src_instance not in node_data:
+                    node_data[src_instance] = {'outputs': {}}
+                
+                if src_port not in node_data[src_instance]['outputs']:
+                    node_data[src_instance]['outputs'][src_port] = []
+                
+                node_data[src_instance]['outputs'][src_port].append({
+                    'node': dst_instance,
+                    'port': dst_port
+                })
+            
+            graph_data['session']['node_data'] = node_data
+            
+            return graph_data
+            
+        except Exception as e:
+            print(f"从XML文件加载graph数据时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def load_graphs_from_files(self):
-        """从本地文件加载graph数据并还原project_panel"""
+        """从本地XML文件加载graph数据并还原project_panel"""
         try:
             # 获取projects目录路径
             projects_dir = os.path.join(os.path.expanduser("~"), ".config", "ipxact_visualizer", "projects")
@@ -2347,7 +2704,8 @@ class IPXactVisualizer(QMainWindow):
                 print("Projects目录不存在，跳过加载")
                 return
             
-            # 获取所有json文件
+            # 获取所有xml文件（优先）和json文件（兼容旧格式）
+            xml_files = glob.glob(os.path.join(projects_dir, "*.xml"))
             json_files = glob.glob(os.path.join(projects_dir, "*.json"))
             
             # 清空现有的saved_graphs和project_panel
@@ -2355,65 +2713,73 @@ class IPXactVisualizer(QMainWindow):
             self.project_panel.clear()
             
             # 加载每个graph文件
-            for json_file in json_files:
+            for file_path in xml_files + json_files:
                 try:
-                    with open(json_file, 'r', encoding='utf-8') as f:
-                        graph_info = json.load(f)
-                        graph_name = graph_info.get("name", "Unknown")
-                        graph_data = graph_info.get("data")
-                        
-                        # 从graph_data中获取项目信息
-                        project_name = 'UnknownProject'
-                        module_name = 'UnknownModule'
-                        version = '1.0'
-                        verilog_file = ''
-                        
-                        if graph_data:
-                            project_name = graph_data.get('project_name', 'UnknownProject')
-                            module_name = graph_data.get('module_name', 'UnknownModule')
-                            version = graph_data.get('version', '1.0')
-                            verilog_file = graph_data.get('verilog_file', '')
-                        else:
-                            # 如果graph_data为None，尝试从文件路径或graph_name中推断信息
-                            # 从graph_name中提取模块名称和版本号
-                            if graph_name:
-                                parts = graph_name.split('_')
-                                if len(parts) >= 2:
-                                    module_name = '_'.join(parts[:-1])
-                                    version = parts[-1]
-                                else:
-                                    module_name = graph_name
-                                    version = '1.0'
-                        
-                        # 添加到saved_graphs
-                        self.saved_graphs.append((graph_name, graph_data))
-                        
-                        # 按照三层结构添加到project_panel
-                        # 查找或创建vendor项 (Phytium)
-                        vendor_item = None
-                        for i in range(self.project_panel.topLevelItemCount()):
-                            item = self.project_panel.topLevelItem(i)
-                            if item.text(0) == "Phytium":
-                                vendor_item = item
-                                break
-                        
-                        if not vendor_item:
-                            vendor_item = QTreeWidgetItem(self.project_panel)
-                            vendor_item.setText(0, "Phytium")
-                        
-                        # 查找或创建project项
-                        project_item = None
-                        for i in range(vendor_item.childCount()):
-                            item = vendor_item.child(i)
-                            if item.text(0) == project_name:
-                                project_item = item
-                                break
-                        
-                        if not project_item:
-                            project_item = QTreeWidgetItem(vendor_item)
-                            project_item.setText(0, project_name)
-                        
-                        # 创建module项
+                    graph_name = os.path.basename(file_path)
+                    graph_name = os.path.splitext(graph_name)[0]
+                    
+                    if file_path.endswith('.xml'):
+                        # 从IP-XACT XML文件加载
+                        graph_data = self.load_graph_from_xml(file_path)
+                    else:
+                        # 从JSON文件加载（兼容旧格式）
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            graph_info = json.load(f)
+                            graph_name = graph_info.get("name", graph_name)
+                            graph_data = graph_info.get("data")
+                    
+                    # 从graph_data中获取项目信息
+                    project_name = 'UnknownProject'
+                    module_name = 'UnknownModule'
+                    version = '1.0'
+                    verilog_file = ''
+                    
+                    if graph_data:
+                        project_name = graph_data.get('project_name', 'UnknownProject')
+                        module_name = graph_data.get('module_name', 'UnknownModule')
+                        version = graph_data.get('version', '1.0')
+                        verilog_file = graph_data.get('verilog_file', '')
+                    else:
+                        # 如果graph_data为None，尝试从文件路径或graph_name中推断信息
+                        # 从graph_name中提取模块名称和版本号
+                        if graph_name:
+                            parts = graph_name.split('_')
+                            if len(parts) >= 2:
+                                module_name = '_'.join(parts[:-1])
+                                version = parts[-1]
+                            else:
+                                module_name = graph_name
+                                version = '1.0'
+                    
+                    # 添加到saved_graphs
+                    self.saved_graphs.append((graph_name, graph_data))
+                    
+                    # 按照三层结构添加到project_panel
+                    # 查找或创建vendor项 (Phytium)
+                    vendor_item = None
+                    for i in range(self.project_panel.topLevelItemCount()):
+                        item = self.project_panel.topLevelItem(i)
+                        if item.text(0) == "Phytium":
+                            vendor_item = item
+                            break
+                    
+                    if not vendor_item:
+                        vendor_item = QTreeWidgetItem(self.project_panel)
+                        vendor_item.setText(0, "Phytium")
+                    
+                    # 查找或创建project项
+                    project_item = None
+                    for i in range(vendor_item.childCount()):
+                        item = vendor_item.child(i)
+                        if item.text(0) == project_name:
+                            project_item = item
+                            break
+                    
+                    if not project_item:
+                        project_item = QTreeWidgetItem(vendor_item)
+                        project_item.setText(0, project_name)
+                    
+                    # 创建module项
                         module_item = QTreeWidgetItem(project_item)
                         module_item.setText(0, graph_name)
                         module_item.setData(0, Qt.UserRole, len(self.saved_graphs) - 1)  # 存储索引
