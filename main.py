@@ -17,7 +17,11 @@ from NodeGraphQt import BaseNode, NodeGraph
 from src.nodegraph_tools import (get_all_connections, make_template_node, 
                                  CircleNodeIn, CircleNodeOut,
                                  build_circle_node_component_data,
-                                 sync_circle_node_component_data)
+                                 sync_circle_node_component_data,
+                                 build_glue_node_component_data,
+                                 sync_glue_node_component_data,
+                                 GlueConstNode, GlueSliceNode, GlueConcatNode,
+                                 verilog_identifier)
 from src.portInfoDialog import PortInfoDialog 
 from src.newBusDefDialog import NewBusDefDialog
 from src.newComponentDialog import NewComponentDialog
@@ -567,6 +571,9 @@ class IPXactVisualizer(QMainWindow):
         # 注册圆形节点
         self.graph.register_node(CircleNodeOut)
         self.graph.register_node(CircleNodeIn)
+        self.graph.register_node(GlueConstNode)
+        self.graph.register_node(GlueSliceNode)
+        self.graph.register_node(GlueConcatNode)
         
         # 设置右键菜单
         self.graph.set_context_menu_from_file('./src/hotkeys.json')
@@ -1111,8 +1118,16 @@ class IPXactVisualizer(QMainWindow):
                 if node_name in nodes_component_data:
                     node.component_data = nodes_component_data[node_name].get('component_data')
                     node.node_data = node.component_data
+                    if node.type_.startswith('user.glue.'):
+                        glue_data = node.component_data.get('glue', {}) if node.component_data else {}
+                        node.glue_op = glue_data.get('op', getattr(node, 'glue_op', ''))
+                        node.glue_params = glue_data.get('params', getattr(node, 'glue_params', {}))
+                        node.glue_base_name = glue_data.get('base_name', node.component_data.get('name', node.name()))
+                        sync_glue_node_component_data(node)
                 elif node.type_ in ('user.circle.CircleNodeIn', 'user.circle.CircleNodeOut'):
                     sync_circle_node_component_data(node)
+                elif node.type_.startswith('user.glue.'):
+                    sync_glue_node_component_data(node)
             
             # 恢复节点位置信息
             node_positions = graph_data.get('node_positions', {})
@@ -1646,6 +1661,9 @@ class IPXactVisualizer(QMainWindow):
         circle_component_data = build_circle_node_component_data(node)
         if circle_component_data:
             return circle_component_data
+        glue_component_data = build_glue_node_component_data(node)
+        if glue_component_data:
+            return glue_component_data
         return {}
 
     def get_port_width(self, node, port_name):
@@ -2033,6 +2051,8 @@ class IPXactVisualizer(QMainWindow):
                     and not getattr(node, 'component_data', None)
                 ):
                     sync_circle_node_component_data(node)
+                if node.type_.startswith('user.glue.'):
+                    sync_glue_node_component_data(node)
 
                 if hasattr(node, 'component_data') and node.component_data:
                     node_name = node.name()
@@ -2271,16 +2291,28 @@ class IPXactVisualizer(QMainWindow):
                         result[logical] = physical
                 return result
 
-            def endpoint_signal(node_type, node_name, port_name, physical_port=None):
+            def glue_signal_name(component_data, node_name, port_name='out'):
+                glue_info = component_data.get('glue', {}) if component_data else {}
+                base_name = node_name
+                if component_data:
+                    base_name = glue_info.get('base_name') or component_data.get('name') or node_name
+                return f"{verilog_identifier(base_name)}_{port_name}"
+
+            def endpoint_signal(node_type, node_name, port_name, physical_port=None, component_data=None):
                 """将 graph endpoint 转换成 Verilog 中展开后的 signal 名。"""
                 if node_type == 'user.circle.CircleNodeIn':
                     return physical_port or node_name
                 if node_type == 'user.circle.CircleNodeOut':
                     return physical_port or node_name
+                if node_type.startswith('user.glue.'):
+                    return glue_signal_name(component_data or {}, node_name, physical_port or port_name)
                 return f"{node_name}_{physical_port or port_name}"
 
             def is_top_port_node(node_type):
                 return node_type in ('user.circle.CircleNodeIn', 'user.circle.CircleNodeOut')
+
+            def is_glue_node(node_type):
+                return node_type.startswith('user.glue.')
 
             def is_instance_node(node_type):
                 return (
@@ -2289,6 +2321,7 @@ class IPXactVisualizer(QMainWindow):
                         'user.circle.CircleNodeOut',
                         'nodeGraphQt.nodes.BackdropNode'
                     )
+                    and not is_glue_node(node_type)
                 )
 
             def normalize_direction(direction):
@@ -2326,6 +2359,18 @@ class IPXactVisualizer(QMainWindow):
                     inout_ports.append(port)
                 else:
                     output_ports.append(port)
+
+            def component_port_width(component_data, port_name):
+                for port in component_data.get('ports', []):
+                    if port.get('name') == port_name:
+                        return normalize_width(port.get('width', 1))
+                return 1
+
+            def glue_literal(component_data):
+                glue_info = component_data.get('glue', {}) if component_data else {}
+                if glue_info.get('op') == 'const':
+                    return str(glue_info.get('params', {}).get('value', "1'b0"))
+                return None
             
             # 提取所有输入和输出端口
             input_ports = []
@@ -2380,8 +2425,20 @@ class IPXactVisualizer(QMainWindow):
             template_data['inout_ports'] = inout_ports
             
             instance_nodes = []
+            glue_nodes = []
             for node_id, node_data in nodes.items():
                 node_type = node_data.get('type_', '')
+                node_name = node_data.get('name', f'node_{node_id}')
+
+                if is_glue_node(node_type):
+                    component_data = nodes_component_data.get(node_name, {}).get('component_data', {})
+                    if component_data:
+                        glue_nodes.append({
+                            'node_name': node_name,
+                            'node_type': node_type,
+                            'component_data': component_data
+                        })
+                    continue
 
                 if not is_instance_node(node_type):
                     continue
@@ -2412,10 +2469,42 @@ class IPXactVisualizer(QMainWindow):
 
             direct_instance_ports = {}
             internal_wire_names = set()
+            glue_input_signals = {}
+            glue_output_wires = set()
 
             def bind_or_assign(src_node_type, src_node_name, src_port, src_signal,
                                dst_node_type, dst_node_name, dst_port, dst_signal):
                 """顶层端口直连 instance；其它连接保留为 assign。"""
+                if is_glue_node(dst_node_type):
+                    glue_input_signals[(dst_node_name, dst_port)] = src_signal
+                    if is_instance_node(src_node_type):
+                        internal_wire_names.add(src_signal)
+                    if is_glue_node(src_node_type):
+                        glue_output_wires.add(src_signal)
+                    return
+
+                if is_glue_node(src_node_type):
+                    src_component_data = nodes_component_data.get(src_node_name, {}).get('component_data', {})
+                    literal_value = glue_literal(src_component_data)
+                    if literal_value is not None:
+                        if is_instance_node(dst_node_type):
+                            direct_instance_ports[(dst_node_name, dst_port)] = literal_value
+                            return
+                        if is_glue_node(dst_node_type):
+                            glue_input_signals[(dst_node_name, dst_port)] = literal_value
+                            return
+                        if is_top_port_node(dst_node_type):
+                            template_data['connections'].append({
+                                'source': literal_value,
+                                'target': dst_signal
+                            })
+                            return
+
+                    glue_output_wires.add(src_signal)
+                    if is_instance_node(dst_node_type):
+                        direct_instance_ports[(dst_node_name, dst_port)] = src_signal
+                        return
+
                 if is_top_port_node(src_node_type) and is_instance_node(dst_node_type):
                     direct_instance_ports[(dst_node_name, dst_port)] = src_signal
                     return
@@ -2427,9 +2516,14 @@ class IPXactVisualizer(QMainWindow):
                     'source': src_signal,
                     'target': dst_signal
                 })
-                for signal in (src_signal, dst_signal):
-                    if '_' in signal and signal not in (src_node_name, dst_node_name):
-                        internal_wire_names.add(signal)
+                if is_instance_node(src_node_type):
+                    internal_wire_names.add(src_signal)
+                if is_instance_node(dst_node_type):
+                    internal_wire_names.add(dst_signal)
+                if is_glue_node(src_node_type):
+                    glue_output_wires.add(src_signal)
+                if is_glue_node(dst_node_type):
+                    glue_output_wires.add(dst_signal)
             
             # 处理连接关系
             for conn in connections:
@@ -2536,8 +2630,8 @@ class IPXactVisualizer(QMainWindow):
                             src_physical = src_logical_to_physical[logical_port]
                             dst_physical = dst_logical_to_physical[logical_port]
 
-                            src_signal = endpoint_signal(src_node_type, src_node_name, src_port, src_physical)
-                            dst_signal = endpoint_signal(dst_node_type, dst_node_name, dst_port, dst_physical)
+                            src_signal = endpoint_signal(src_node_type, src_node_name, src_port, src_physical, src_component_data)
+                            dst_signal = endpoint_signal(dst_node_type, dst_node_name, dst_port, dst_physical, dst_component_data)
 
                             bind_or_assign(
                                 src_node_type, src_node_name, src_physical, src_signal,
@@ -2555,13 +2649,64 @@ class IPXactVisualizer(QMainWindow):
                         dst_bus_map = logical_to_physical(dst_bus_info)
                         dst_physical = next(iter(dst_bus_map.values()), None)
 
-                    src_signal = endpoint_signal(src_node_type, src_node_name, src_port, src_physical)
-                    dst_signal = endpoint_signal(dst_node_type, dst_node_name, dst_port, dst_physical)
+                    src_signal = endpoint_signal(src_node_type, src_node_name, src_port, src_physical, src_component_data)
+                    dst_signal = endpoint_signal(dst_node_type, dst_node_name, dst_port, dst_physical, dst_component_data)
 
                     bind_or_assign(
                         src_node_type, src_node_name, src_physical or src_port, src_signal,
                         dst_node_type, dst_node_name, dst_physical or dst_port, dst_signal
                     )
+
+            for glue_node in glue_nodes:
+                component_data = glue_node['component_data']
+                node_name = glue_node['node_name']
+                glue_info = component_data.get('glue', {})
+                glue_op = glue_info.get('op', '')
+                params = glue_info.get('params', {})
+                out_signal = glue_signal_name(component_data, node_name, 'out')
+
+                if out_signal not in glue_output_wires:
+                    continue
+
+                output_width = component_port_width(component_data, 'out')
+                template_data['internal_wires'].append({
+                    'name': out_signal,
+                    'width': output_width,
+                    'range': f'[{output_width - 1}:0]' if output_width > 1 else ''
+                })
+
+                if glue_op == 'const':
+                    source_expr = str(params.get('value', "1'b0"))
+                elif glue_op == 'slice':
+                    input_signal = glue_input_signals.get((node_name, 'in'))
+                    if not input_signal:
+                        print(f"警告: Glue Slice {node_name} 缺少输入连接")
+                        continue
+                    msb = params.get('msb', 0)
+                    lsb = params.get('lsb', 0)
+                    source_expr = f"{input_signal}[{msb}:{lsb}]"
+                elif glue_op == 'concat':
+                    concat_inputs = []
+                    input_count = int(params.get('input_count', 4) or 4)
+                    input_values = params.get('input_values', [])
+                    for index in range(input_count):
+                        input_value = input_values[index] if index < len(input_values) else ''
+                        input_signal = glue_input_signals.get((node_name, f'in{index}')) or str(input_value).strip()
+                        if input_signal:
+                            concat_inputs.append((index, input_signal))
+                    if not concat_inputs:
+                        print(f"警告: Glue Concat {node_name} 缺少输入连接")
+                        continue
+                    ordered_inputs = [signal for _, signal in sorted(concat_inputs, reverse=True)]
+                    source_expr = '{' + ', '.join(ordered_inputs) + '}'
+                else:
+                    print(f"警告: 不支持的 Glue Logic 类型: {glue_op}")
+                    continue
+
+                template_data['connections'].append({
+                    'source': source_expr,
+                    'target': out_signal
+                })
 
             for instance in instance_nodes:
                 component_data = instance['component_data']

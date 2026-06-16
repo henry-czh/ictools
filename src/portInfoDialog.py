@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QTableWidget, QHeaderView, QHBoxLayout,
                     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QGroupBox, QLabel, QLineEdit, QGridLayout, QFileDialog, QMessageBox, QSplitter)
 from PyQt5.QtCore import Qt
-from src.nodegraph_tools import build_circle_node_component_data
+from src.nodegraph_tools import build_circle_node_component_data, build_glue_node_component_data
 
 class PortInfoDialog(QDialog):
     """端口信息显示对话框"""
@@ -380,6 +380,9 @@ class PortInfoDialog(QDialog):
         circle_component_data = build_circle_node_component_data(node)
         if circle_component_data:
             return circle_component_data
+        glue_component_data = build_glue_node_component_data(node)
+        if glue_component_data:
+            return glue_component_data
         return {}
 
     def get_port_width(self, node, port_name):

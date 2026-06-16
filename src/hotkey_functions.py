@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (QInputDialog, QMessageBox, QDialog, QVBoxLayout,
 from PyQt5.QtCore import Qt
 
 # 导入自定义 BackdropNode
-from src.nodegraph_tools import BackdropNode, sync_circle_node_component_data
+from src.nodegraph_tools import BackdropNode, sync_circle_node_component_data, sync_glue_node_component_data
 
 def get_bus_definitions(busdef_dir=None):
     """
@@ -493,6 +493,174 @@ def add_circle_node_in(graph):
     except Exception as e:
         print(f"创建输入端口节点失败: {e}")
         QMessageBox.critical(None, "错误", f"创建输入端口节点失败: {str(e)}")
+
+
+def _unique_node_name(graph, prefix):
+    existing_names = {node.name() for node in graph.all_nodes()}
+    index = 0
+    while f'{prefix}_{index}' in existing_names:
+        index += 1
+    return f'{prefix}_{index}'
+
+
+class GlueConcatDialog(QDialog):
+    """Glue Concat 创建配置。"""
+
+    def __init__(self, default_name, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Glue Concat")
+        layout = QVBoxLayout(self)
+
+        name_layout = QHBoxLayout()
+        name_layout.addWidget(QLabel("节点名称:"))
+        self.name_edit = QLineEdit(default_name)
+        name_layout.addWidget(self.name_edit)
+        layout.addLayout(name_layout)
+
+        output_layout = QHBoxLayout()
+        output_layout.addWidget(QLabel("输出位宽:"))
+        self.output_width_edit = QSpinBox()
+        self.output_width_edit.setRange(1, 4096)
+        self.output_width_edit.setValue(4)
+        output_layout.addWidget(self.output_width_edit)
+        output_layout.addWidget(QLabel("bit"))
+        layout.addLayout(output_layout)
+
+        self.width_edits = []
+        self.value_edits = []
+        width_group = QGroupBox("输入位宽")
+        width_layout = QVBoxLayout()
+        for index in range(4):
+            row_layout = QHBoxLayout()
+            row_layout.addWidget(QLabel(f"in{index}:"))
+            width_edit = QSpinBox()
+            width_edit.setRange(1, 4096)
+            width_edit.setValue(1)
+            row_layout.addWidget(width_edit)
+            row_layout.addWidget(QLabel("bit"))
+            row_layout.addWidget(QLabel("直接值:"))
+            value_edit = QLineEdit()
+            value_edit.setPlaceholderText("可空, 例: 8'hff / 4'b1010 / 10")
+            row_layout.addWidget(value_edit)
+            width_layout.addLayout(row_layout)
+            self.width_edits.append(width_edit)
+            self.value_edits.append(value_edit)
+        width_group.setLayout(width_layout)
+        layout.addWidget(width_group)
+
+        button_layout = QHBoxLayout()
+        ok_button = QPushButton("确定")
+        ok_button.clicked.connect(self.accept)
+        cancel_button = QPushButton("取消")
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(ok_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+
+    def get_settings(self):
+        return {
+            'name': self.name_edit.text().strip(),
+            'output_width': self.output_width_edit.value(),
+            'input_widths': [width_edit.value() for width_edit in self.width_edits],
+            'input_values': [value_edit.text().strip() for value_edit in self.value_edits]
+        }
+
+
+def add_glue_const_node(graph):
+    """添加常量 Glue Logic 节点。"""
+    try:
+        default_name = _unique_node_name(graph, 'glue_const')
+        name, ok = QInputDialog.getText(None, "Glue Const", "节点名称:", text=default_name)
+        if not ok:
+            return
+        name = name.strip() or default_name
+        width, ok = QInputDialog.getInt(None, "Glue Const", "常量位宽:", 1, 1, 4096, 1)
+        if not ok:
+            return
+        value, ok = QInputDialog.getText(None, "Glue Const", "常量值:", text=f"{width}'h0")
+        if not ok:
+            return
+
+        node = graph.create_node(
+            'user.glue.GlueConstNode',
+            name=name,
+            pos=graph.cursor_pos()
+        )
+        node.glue_base_name = name
+        node.glue_params = {'width': width, 'value': value.strip() or f"{width}'h0"}
+        sync_glue_node_component_data(node)
+        print(f"已创建 Glue Const 节点: {node.name()}, width={width}, value={node.glue_params['value']}")
+    except Exception as e:
+        print(f"创建 Glue Const 节点失败: {e}")
+        QMessageBox.critical(None, "错误", f"创建 Glue Const 节点失败: {str(e)}")
+
+
+def add_glue_slice_node(graph):
+    """添加位域选择 Glue Logic 节点。"""
+    try:
+        default_name = _unique_node_name(graph, 'glue_slice')
+        name, ok = QInputDialog.getText(None, "Glue Slice", "节点名称:", text=default_name)
+        if not ok:
+            return
+        name = name.strip() or default_name
+        input_width, ok = QInputDialog.getInt(None, "Glue Slice", "输入位宽:", 32, 1, 4096, 1)
+        if not ok:
+            return
+        msb, ok = QInputDialog.getInt(None, "Glue Slice", "MSB:", input_width - 1, 0, 4095, 1)
+        if not ok:
+            return
+        lsb, ok = QInputDialog.getInt(None, "Glue Slice", "LSB:", 0, 0, 4095, 1)
+        if not ok:
+            return
+        if msb < lsb:
+            QMessageBox.warning(None, "警告", "MSB 必须大于等于 LSB")
+            return
+
+        node = graph.create_node(
+            'user.glue.GlueSliceNode',
+            name=name,
+            pos=graph.cursor_pos()
+        )
+        node.glue_base_name = name
+        node.glue_params = {'input_width': input_width, 'msb': msb, 'lsb': lsb}
+        sync_glue_node_component_data(node)
+        print(f"已创建 Glue Slice 节点: {node.name()}, [{msb}:{lsb}]")
+    except Exception as e:
+        print(f"创建 Glue Slice 节点失败: {e}")
+        QMessageBox.critical(None, "错误", f"创建 Glue Slice 节点失败: {str(e)}")
+
+
+def add_glue_concat_node(graph):
+    """添加拼接 Glue Logic 节点。"""
+    try:
+        default_name = _unique_node_name(graph, 'glue_concat')
+        dialog = GlueConcatDialog(default_name)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        settings = dialog.get_settings()
+        name = settings['name'] or default_name
+        input_widths = settings['input_widths']
+        input_values = settings['input_values']
+        output_width = settings['output_width']
+
+        input_count = 4
+        node = graph.create_node(
+            'user.glue.GlueConcatNode',
+            name=name,
+            pos=graph.cursor_pos()
+        )
+        node.glue_base_name = name
+        node.glue_params = {
+            'input_count': input_count,
+            'input_widths': input_widths,
+            'input_values': input_values,
+            'output_width': output_width
+        }
+        sync_glue_node_component_data(node)
+        print(f"已创建 Glue Concat 节点: {node.name()}, input_widths={input_widths}, output_width={output_width}")
+    except Exception as e:
+        print(f"创建 Glue Concat 节点失败: {e}")
+        QMessageBox.critical(None, "错误", f"创建 Glue Concat 节点失败: {str(e)}")
 
 
 def zoom_in(graph):

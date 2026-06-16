@@ -3,6 +3,7 @@ from NodeGraphQt import BaseNode, NodeGraph, BaseNodeCircle, Port, BackdropNode 
 from Qt.QtGui import QColor, QPainter, QPen, QPainterPath
 from Qt.QtCore import Qt, QPointF
 import math
+import re
 from collections import defaultdict
 import xml.etree.ElementTree as ET
 
@@ -542,6 +543,218 @@ class CircleNodeIn(BaseNodeCircle):
         self.add_output(port_name, display_name=False)
         self.PORT_NAME = port_name
         self.set_port_deletion_allowed(False)
+
+
+def _width_msb(width):
+    try:
+        width = int(width)
+        return str(max(width - 1, 0))
+    except Exception:
+        return '0'
+
+
+def verilog_identifier(name, fallback='glue'):
+    """将显示名转换为可用于 Verilog signal 的标识符。"""
+    identifier = re.sub(r'\W+', '_', str(name or '').strip())
+    identifier = identifier.strip('_')
+    if not identifier:
+        identifier = fallback
+    if identifier[0].isdigit():
+        identifier = f'_{identifier}'
+    return identifier
+
+
+def _glue_label(base_name, glue_op, params):
+    if glue_op == 'const':
+        value = params.get('value', "1'b0")
+        return f"{base_name} = {value}"
+    if glue_op == 'slice':
+        return f"{base_name} [{params.get('msb', 0)}:{params.get('lsb', 0)}]"
+    if glue_op == 'concat':
+        widths = params.get('input_widths', [])
+        if widths:
+            output_width = params.get('output_width', sum(int(width or 1) for width in widths))
+            return f"{base_name} [{output_width}] {{{', '.join(str(w) for w in widths)}}}"
+    return base_name
+
+
+def build_glue_node_component_data(node):
+    """为 Glue Logic 节点构造用于校验、保存和 Verilog 生成的 component_data。"""
+    node_type = getattr(node, 'type_', '')
+    if not node_type.startswith('user.glue.'):
+        return None
+
+    glue_op = getattr(node, 'glue_op', '')
+    component_data = {
+        'name': getattr(node, 'glue_base_name', node.name()),
+        'description': 'Glue logic node',
+        'vendor': 'Phytium',
+        'library': 'glue',
+        'version': '1.0',
+        'ports': [],
+        'parameters': [],
+        'defines': [],
+        'bus_interfaces': [],
+        'port_maps': [],
+        'sv_file': '',
+        'xml_file_path': '',
+        'glue': {
+            'op': glue_op,
+            'params': dict(getattr(node, 'glue_params', {}) or {})
+        }
+    }
+    component_data['glue']['base_name'] = getattr(node, 'glue_base_name', node.name())
+
+    if glue_op == 'const':
+        width = int(component_data['glue']['params'].get('width', 1) or 1)
+        value = component_data['glue']['params'].get('value', "1'b0")
+        component_data['parameters'] = [
+            {'name': 'width', 'value': str(width)},
+            {'name': 'value', 'value': str(value)}
+        ]
+        component_data['ports'].append({
+            'name': 'out',
+            'direction': 'out',
+            'width': width,
+            'msb': _width_msb(width),
+            'lsb': '0'
+        })
+    elif glue_op == 'slice':
+        input_width = int(component_data['glue']['params'].get('input_width', 32) or 32)
+        msb = int(component_data['glue']['params'].get('msb', 0) or 0)
+        lsb = int(component_data['glue']['params'].get('lsb', 0) or 0)
+        output_width = abs(msb - lsb) + 1
+        component_data['parameters'] = [
+            {'name': 'input_width', 'value': str(input_width)},
+            {'name': 'msb', 'value': str(msb)},
+            {'name': 'lsb', 'value': str(lsb)}
+        ]
+        component_data['ports'].extend([
+            {
+                'name': 'in',
+                'direction': 'in',
+                'width': input_width,
+                'msb': _width_msb(input_width),
+                'lsb': '0'
+            },
+            {
+                'name': 'out',
+                'direction': 'out',
+                'width': output_width,
+                'msb': _width_msb(output_width),
+                'lsb': '0'
+            }
+        ])
+    elif glue_op == 'concat':
+        input_count = int(component_data['glue']['params'].get('input_count', 4) or 4)
+        input_widths = component_data['glue']['params'].get('input_widths', [])
+        if not input_widths:
+            default_input_width = int(component_data['glue']['params'].get('input_width', 1) or 1)
+            input_widths = [default_input_width] * input_count
+        input_widths = [int(width or 1) for width in input_widths[:input_count]]
+        while len(input_widths) < input_count:
+            input_widths.append(1)
+        output_width = int(component_data['glue']['params'].get('output_width', sum(input_widths)) or 1)
+        input_values = component_data['glue']['params'].get('input_values', [])
+        input_values = [str(value).strip() for value in input_values[:input_count]]
+        while len(input_values) < input_count:
+            input_values.append('')
+        component_data['parameters'] = [
+            {'name': 'input_count', 'value': str(input_count)},
+            {'name': 'input_widths', 'value': ','.join(str(width) for width in input_widths)},
+            {'name': 'input_values', 'value': ','.join(input_values)},
+            {'name': 'output_width', 'value': str(output_width)}
+        ]
+        for index in range(input_count):
+            input_width = input_widths[index]
+            component_data['ports'].append({
+                'name': f'in{index}',
+                'direction': 'in',
+                'width': input_width,
+                'msb': _width_msb(input_width),
+                'lsb': '0'
+            })
+        component_data['ports'].append({
+            'name': 'out',
+            'direction': 'out',
+            'width': output_width,
+            'msb': _width_msb(output_width),
+            'lsb': '0'
+        })
+    else:
+        return None
+
+    return component_data
+
+
+def sync_glue_node_component_data(node):
+    """将 Glue Logic 节点属性同步为 component_data。"""
+    base_name = getattr(node, 'glue_base_name', None) or node.name()
+    node.glue_base_name = str(base_name).split(' = ')[0].split(' [')[0].split(' {')[0]
+    node.set_name(_glue_label(node.glue_base_name, getattr(node, 'glue_op', ''), getattr(node, 'glue_params', {})))
+    component_data = build_glue_node_component_data(node)
+    if component_data:
+        _style_glue_node(node)
+        node.component_data = component_data
+        node.node_data = component_data
+    return component_data
+
+
+def _style_glue_node(node):
+    """Glue Logic 节点统一使用区别于普通 instance 的外观。"""
+    node.set_property('color', (74, 52, 18, 255))
+    node.set_property('border_color', (238, 170, 60, 255))
+    node.set_property('text_color', (255, 238, 205, 255))
+
+
+class GlueConstNode(BaseNode):
+    __identifier__ = 'user.glue'
+    NODE_NAME = 'Glue Const'
+
+    def __init__(self):
+        super().__init__()
+        _style_glue_node(self)
+        self.glue_op = 'const'
+        self.glue_base_name = 'glue_const'
+        self.glue_params = {'width': 1, 'value': "1'b0"}
+        self.add_output('out')
+        sync_glue_node_component_data(self)
+
+
+class GlueSliceNode(BaseNode):
+    __identifier__ = 'user.glue'
+    NODE_NAME = 'Glue Slice'
+
+    def __init__(self):
+        super().__init__()
+        _style_glue_node(self)
+        self.glue_op = 'slice'
+        self.glue_base_name = 'glue_slice'
+        self.glue_params = {'input_width': 32, 'msb': 0, 'lsb': 0}
+        self.add_input('in')
+        self.add_output('out')
+        sync_glue_node_component_data(self)
+
+
+class GlueConcatNode(BaseNode):
+    __identifier__ = 'user.glue'
+    NODE_NAME = 'Glue Concat'
+
+    def __init__(self):
+        super().__init__()
+        _style_glue_node(self)
+        self.glue_op = 'concat'
+        self.glue_base_name = 'glue_concat'
+        self.glue_params = {
+            'input_count': 4,
+            'input_widths': [1, 1, 1, 1],
+            'input_values': ['', '', '', ''],
+            'output_width': 4
+        }
+        for index in range(4):
+            self.add_input(f'in{index}')
+        self.add_output('out')
+        sync_glue_node_component_data(self)
 
 def _parse_bus_signal_widths(bus_def):
     """从 bus definition 文件中读取逻辑信号位宽。"""

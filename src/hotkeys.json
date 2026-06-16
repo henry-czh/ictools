@@ -258,6 +258,29 @@
         "type":"separator"
       },
       {
+        "type":"menu",
+        "label":"Glue Logic",
+        "items":[
+          {
+            "type":"command",
+            "label":"Slice",
+            "file":"./hotkey_functions.py",
+            "function_name":"add_glue_slice_node",
+            "shortcut":""
+          },
+          {
+            "type":"command",
+            "label":"Concat",
+            "file":"./hotkey_functions.py",
+            "function_name":"add_glue_concat_node",
+            "shortcut":""
+          }
+        ]
+      },
+      {
+        "type":"separator"
+      },
+      {
         "type":"command",
         "label":"Node Search",
         "file":"./hotkey_functions.py",
