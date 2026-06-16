@@ -19,7 +19,12 @@ from PyQt5.QtWidgets import (QInputDialog, QMessageBox, QDialog, QVBoxLayout,
 from PyQt5.QtCore import Qt
 
 # 导入自定义 BackdropNode
-from src.nodegraph_tools import BackdropNode, sync_circle_node_component_data, sync_glue_node_component_data
+from src.nodegraph_tools import (
+    BackdropNode,
+    parse_verilog_literal_width,
+    sync_circle_node_component_data,
+    sync_glue_node_component_data
+)
 
 def get_bus_definitions(busdef_dir=None):
     """
@@ -556,6 +561,18 @@ class GlueConcatDialog(QDialog):
         button_layout.addWidget(ok_button)
         button_layout.addWidget(cancel_button)
         layout.addLayout(button_layout)
+
+    def accept(self):
+        for index, value_edit in enumerate(self.value_edits):
+            value = value_edit.text().strip()
+            if value and parse_verilog_literal_width(value) is None:
+                QMessageBox.warning(
+                    self,
+                    "常量格式错误",
+                    f"in{index} 的直接值必须注明位宽，例如 8'hff / 4'b1010 / 12'd10"
+                )
+                return
+        super().accept()
 
     def get_settings(self):
         return {

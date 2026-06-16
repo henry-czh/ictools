@@ -8,8 +8,9 @@ from jinja2 import Environment, FileSystemLoader
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QListWidget, QTreeWidget, QTreeWidgetItem, QTextEdit, QMenuBar, 
                              QAction, QFileDialog, QMessageBox, QGraphicsView, QPushButton, 
-                             QDialog, QLineEdit, QLabel, QMenu, QSplitter) 
-from PyQt5.QtCore import Qt, QMimeData, QEvent, QObject, pyqtSignal
+                             QDialog, QLineEdit, QLabel, QMenu, QSplitter, QToolBar, QStyle,
+                             QToolButton)
+from PyQt5.QtCore import Qt, QMimeData, QEvent, QObject, pyqtSignal, QSize
 from PyQt5.QtGui import QDrag, QIcon
 from src.ipxact_parser import IPXactParser
 from src.ipxact_writer import IPXactWriter
@@ -21,6 +22,7 @@ from src.nodegraph_tools import (get_all_connections, make_template_node,
                                  build_glue_node_component_data,
                                  sync_glue_node_component_data,
                                  GlueConstNode, GlueSliceNode, GlueConcatNode,
+                                 parse_verilog_literal_width,
                                  verilog_identifier)
 from src.portInfoDialog import PortInfoDialog 
 from src.newBusDefDialog import NewBusDefDialog
@@ -518,6 +520,7 @@ class IPXactVisualizer(QMainWindow):
         
         # 创建菜单栏
         self.create_menu_bar()
+        self.create_main_toolbar()
         
         # 创建主布局
         main_widget = QWidget()
@@ -542,21 +545,6 @@ class IPXactVisualizer(QMainWindow):
         
         # 左侧区域
         left_layout = QVBoxLayout()
-        
-        # 添加创建和保存按钮
-        button_layout = QHBoxLayout()
-        
-        # 创建Graph按钮
-        self.create_graph_button = QPushButton("创建Project")
-        self.create_graph_button.clicked.connect(self.create_new_graph)
-        button_layout.addWidget(self.create_graph_button)
-        
-        # 保存Graph按钮
-        self.save_graph_button = QPushButton("保存Project")
-        self.save_graph_button.clicked.connect(self.save_current_graph)
-        button_layout.addWidget(self.save_graph_button)
-        
-        left_layout.addLayout(button_layout)
         
         # 中间和右侧区域
         right_layout = QVBoxLayout()
@@ -818,12 +806,12 @@ class IPXactVisualizer(QMainWindow):
         
         # 打开文件动作
         open_action = QAction("打开", self)
-        open_action.triggered.connect(self.open_file)
+        open_action.triggered.connect(self.open_project_xml)
         file_menu.addAction(open_action)
         
         # 保存文件动作
         save_action = QAction("保存", self)
-        save_action.triggered.connect(self.save_file)
+        save_action.triggered.connect(self.save_current_graph)
         file_menu.addAction(save_action)
         
         # 退出动作
@@ -851,6 +839,133 @@ class IPXactVisualizer(QMainWindow):
         new_busdef_action = QAction("新建busdef", self)
         new_busdef_action.triggered.connect(self.new_busdef)
         create_ip_menu.addAction(new_busdef_action)
+
+        # 视图菜单
+        view_menu = menu_bar.addMenu("视图")
+
+        self.toolbar_visible_action = QAction("显示工具栏", self)
+        self.toolbar_visible_action.setCheckable(True)
+        self.toolbar_visible_action.setChecked(True)
+        self.toolbar_visible_action.triggered.connect(self.set_main_toolbar_visible)
+        view_menu.addAction(self.toolbar_visible_action)
+
+        self.toolbar_toggle_button = QToolButton(self)
+        self.toolbar_toggle_button.setAutoRaise(True)
+        self.toolbar_toggle_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.toolbar_toggle_button.clicked.connect(self.toggle_main_toolbar)
+        self.toolbar_toggle_button.setStyleSheet("""
+            QToolButton {
+                padding: 2px 8px;
+                margin: 1px 4px;
+            }
+        """)
+        menu_bar.setCornerWidget(self.toolbar_toggle_button, Qt.TopRightCorner)
+        self.update_toolbar_toggle_ui(True)
+
+    def toggle_main_toolbar(self):
+        """切换主工具栏显示状态。"""
+        if hasattr(self, 'main_toolbar'):
+            visible = not self.main_toolbar.isVisible()
+        elif hasattr(self, 'toolbar_visible_action'):
+            visible = not self.toolbar_visible_action.isChecked()
+        else:
+            visible = True
+        self.set_main_toolbar_visible(visible)
+
+    def set_main_toolbar_visible(self, visible):
+        """设置主工具栏显示状态，并同步菜单和右上角按钮。"""
+        visible = bool(visible)
+        if hasattr(self, 'main_toolbar'):
+            self.main_toolbar.setVisible(visible)
+
+        if hasattr(self, 'toolbar_visible_action'):
+            self.toolbar_visible_action.blockSignals(True)
+            self.toolbar_visible_action.setChecked(visible)
+            self.toolbar_visible_action.blockSignals(False)
+
+        self.update_toolbar_toggle_ui(visible)
+
+    def update_toolbar_toggle_ui(self, visible):
+        """更新工具栏折叠按钮的显示。"""
+        if not hasattr(self, 'toolbar_toggle_button'):
+            return
+
+        if visible:
+            self.toolbar_toggle_button.setText("隐藏工具栏")
+            self.toolbar_toggle_button.setIcon(self.style().standardIcon(QStyle.SP_ArrowUp))
+            self.toolbar_toggle_button.setToolTip("隐藏主工具栏")
+        else:
+            self.toolbar_toggle_button.setText("显示工具栏")
+            self.toolbar_toggle_button.setIcon(self.style().standardIcon(QStyle.SP_ArrowDown))
+            self.toolbar_toggle_button.setToolTip("显示主工具栏")
+
+    def create_main_toolbar(self):
+        """创建主界面工具栏。"""
+        toolbar = QToolBar("Project工具栏", self)
+        self.main_toolbar = toolbar
+        toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(16, 16))
+        toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        toolbar.setStyleSheet("""
+            QToolBar {
+                spacing: 6px;
+                padding: 3px 6px;
+            }
+            QToolButton {
+                padding: 3px 8px;
+                margin: 1px;
+            }
+        """)
+        self.addToolBar(Qt.TopToolBarArea, toolbar)
+
+        open_project_action = QAction("打开", self)
+        open_project_action.setIcon(self.style().standardIcon(QStyle.SP_DialogOpenButton))
+        open_project_action.setToolTip("打开 Project XML")
+        open_project_action.triggered.connect(self.open_project_xml)
+        toolbar.addAction(open_project_action)
+
+        create_project_action = QAction("创建", self)
+        create_project_action.setIcon(self.style().standardIcon(QStyle.SP_FileDialogNewFolder))
+        create_project_action.setToolTip("创建新的 Project")
+        create_project_action.triggered.connect(self.create_new_graph)
+        toolbar.addAction(create_project_action)
+
+        save_project_action = QAction("保存", self)
+        save_project_action.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
+        save_project_action.setToolTip("保存当前 Project，并在保存前执行连线检查")
+        save_project_action.triggered.connect(self.save_current_graph)
+        toolbar.addAction(save_project_action)
+
+        toolbar.addSeparator()
+
+        check_graph_action = QAction("检查", self)
+        check_graph_action.setIcon(self.style().standardIcon(QStyle.SP_MessageBoxInformation))
+        check_graph_action.setToolTip("检查当前 graph 的未连线端口、位宽和 Glue Logic")
+        check_graph_action.triggered.connect(lambda: self.check_current_graph(show_message=True))
+        toolbar.addAction(check_graph_action)
+
+        toolbar.addSeparator()
+
+        config_action = QAction("配置", self)
+        config_action.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
+        config_action.setToolTip("配置 Library 库目录")
+        config_action.triggered.connect(self.open_library_config)
+        toolbar.addAction(config_action)
+
+        new_component_action = QAction("Component", self)
+        new_component_action.setIcon(self.style().standardIcon(QStyle.SP_FileIcon))
+        new_component_action.setToolTip("创建新的 IP Component")
+        new_component_action.triggered.connect(self.new_component)
+        toolbar.addAction(new_component_action)
+
+        new_busdef_action = QAction("BusDef", self)
+        new_busdef_action.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
+        new_busdef_action.setToolTip("创建新的 busdef")
+        new_busdef_action.triggered.connect(self.new_busdef)
+        toolbar.addAction(new_busdef_action)
+
+        if hasattr(self, 'toolbar_visible_action'):
+            self.set_main_toolbar_visible(self.toolbar_visible_action.isChecked())
     
     def new_busdef(self):
         """新建busdef"""
@@ -989,6 +1104,96 @@ class IPXactVisualizer(QMainWindow):
         
         # 默认展开所有层级
         self.component_list.expandAll()
+
+    def _project_path_exists(self, project_name, graph_name):
+        """检查Project面板中是否已存在同名Project/Module。"""
+        target_path = f"Phytium/{project_name}/{graph_name}"
+        for i in range(self.project_panel.topLevelItemCount()):
+            vendor_item = self.project_panel.topLevelItem(i)
+            vendor_name = vendor_item.text(0)
+            for j in range(vendor_item.childCount()):
+                project_item = vendor_item.child(j)
+                for k in range(project_item.childCount()):
+                    module_item = project_item.child(k)
+                    current_path = f"{vendor_name}/{project_item.text(0)}/{module_item.text(0)}"
+                    if current_path == target_path:
+                        return True
+        return False
+
+    def _add_graph_to_project_panel(self, graph_name, graph_data, graph_index):
+        """按 Phytium -> Project -> Module 三层结构添加Project节点。"""
+        project_name = 'UnknownProject'
+        if graph_data:
+            project_name = graph_data.get('project_name', 'UnknownProject')
+
+        vendor_item = None
+        for i in range(self.project_panel.topLevelItemCount()):
+            item = self.project_panel.topLevelItem(i)
+            if item.text(0) == "Phytium":
+                vendor_item = item
+                break
+
+        if not vendor_item:
+            vendor_item = QTreeWidgetItem(self.project_panel)
+            vendor_item.setText(0, "Phytium")
+
+        project_item = None
+        for i in range(vendor_item.childCount()):
+            item = vendor_item.child(i)
+            if item.text(0) == project_name:
+                project_item = item
+                break
+
+        if not project_item:
+            project_item = QTreeWidgetItem(vendor_item)
+            project_item.setText(0, project_name)
+
+        module_item = QTreeWidgetItem(project_item)
+        module_item.setText(0, graph_name)
+        module_item.setData(0, Qt.UserRole, graph_index)
+        self.project_panel.expandAll()
+        return module_item
+
+    def open_project_xml(self):
+        """打开Project XML并加载到Project面板。"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "打开Project XML", "", "XML Files (*.xml);;All Files (*)"
+        )
+        if not file_path:
+            return
+
+        try:
+            graph_data = self.load_graph_from_xml(file_path)
+            if not graph_data:
+                QMessageBox.warning(self, "警告", "未能从XML中加载Project数据")
+                return
+
+            file_base_name = os.path.splitext(os.path.basename(file_path))[0]
+            project_name = graph_data.get('project_name') or graph_data.get('library') or 'UnknownProject'
+            module_name = graph_data.get('module_name') or file_base_name
+            version = graph_data.get('version') or '1.0'
+            graph_name = f"{module_name}_{version}"
+
+            graph_data['project_name'] = project_name
+            graph_data['module_name'] = module_name
+            graph_data['version'] = version
+            graph_data.setdefault('verilog_file', '')
+
+            if self._project_path_exists(project_name, graph_name):
+                QMessageBox.warning(self, "警告", f"Project中已存在: Phytium/{project_name}/{graph_name}")
+                return
+
+            graph_index = len(self.saved_graphs)
+            self.saved_graphs.append((graph_name, graph_data))
+            module_item = self._add_graph_to_project_panel(graph_name, graph_data, graph_index)
+
+            self.project_panel.setCurrentItem(module_item)
+            self.on_project_selected(module_item, 0)
+
+            print(f"已打开Project XML: {file_path}")
+            QMessageBox.information(self, "成功", f"成功打开Project: {graph_name}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"打开Project XML时出错: {str(e)}")
     
     def open_file(self):
         # 打开文件对话框
@@ -1805,10 +2010,200 @@ class IPXactVisualizer(QMainWindow):
             source_width = self.get_port_width(source_node, source_port_name)
             target_width = self.get_port_width(target_node, target_port_name)
 
+            target_component_data = self.get_node_component_data(target_node)
+            target_glue_op = target_component_data.get('glue', {}).get('op')
+            if (
+                target_glue_op in ('concat', 'slice')
+                and target_port_name.startswith('in')
+            ):
+                if source_width >= target_width:
+                    return (True, "")
+                glue_name = 'Concat' if target_glue_op == 'concat' else 'Slice'
+                return (False, f"位宽不匹配: 源端口 '{source_port_name}' 宽度 {source_width} 位小于 {glue_name} 输入 '{target_port_name}' 宽度 {target_width} 位")
+
             if source_width != target_width:
                 return (False, f"位宽不匹配: 源端口 '{source_port_name}' 宽度 {source_width} 位 vs 目标端口 '{target_port_name}' 宽度 {target_width} 位")
 
             return (True, "")
+
+    def check_current_graph(self, show_message=True, print_report=True):
+        """检查当前 graph 中的未连线端口、位宽不匹配和 Glue Logic 完整性。"""
+        if not hasattr(self, 'graph') or not self.graph:
+            if show_message:
+                QMessageBox.warning(self, "警告", "当前没有可检查的 graph")
+            return None
+
+        unconnected = []
+        width_errors = []
+        glue_errors = []
+
+        def is_checkable_node(node):
+            return getattr(node, 'type_', '') != 'nodeGraphQt.nodes.BackdropNode'
+
+        def port_label(node, port_name):
+            return f"{node.name()}.{port_name}"
+
+        def connected_ports_for(node, port_name, direction):
+            ports = node.inputs() if direction == 'input' else node.outputs()
+            port = ports.get(port_name)
+            return port.connected_ports() if port else []
+
+        nodes = [node for node in self.graph.all_nodes() if is_checkable_node(node)]
+
+        for node in nodes:
+            for port_name, port in node.inputs().items():
+                if not port.connected_ports():
+                    unconnected.append(port_label(node, port_name))
+            for port_name, port in node.outputs().items():
+                if not port.connected_ports():
+                    unconnected.append(port_label(node, port_name))
+
+        checked_connections = set()
+        for source_node in nodes:
+            for source_port_name, source_port in source_node.outputs().items():
+                for target_port in source_port.connected_ports():
+                    target_node = target_port.node()
+                    target_port_name = target_port.name()
+                    key = (
+                        source_node.name(),
+                        source_port_name,
+                        target_node.name(),
+                        target_port_name
+                    )
+                    if key in checked_connections:
+                        continue
+                    checked_connections.add(key)
+
+                    valid, error_msg = self.validate_port_connection(
+                        source_node,
+                        source_port_name,
+                        target_node,
+                        target_port_name
+                    )
+                    if not valid:
+                        width_errors.append(
+                            f"{port_label(source_node, source_port_name)} -> "
+                            f"{port_label(target_node, target_port_name)}: {error_msg}"
+                        )
+
+        for node in nodes:
+            component_data = self.get_node_component_data(node)
+            glue_info = component_data.get('glue', {})
+            glue_op = glue_info.get('op', '')
+            params = glue_info.get('params', {})
+
+            if glue_op == 'slice':
+                input_connections = connected_ports_for(node, 'in', 'input')
+                output_connections = connected_ports_for(node, 'out', 'output')
+                if not input_connections:
+                    glue_errors.append(f"{node.name()}: Slice 输入 in 未连接")
+                if not output_connections:
+                    glue_errors.append(f"{node.name()}: Slice 输出 out 未连接")
+                if input_connections:
+                    source_port = input_connections[0]
+                    source_node = source_port.node()
+                    source_width = self.get_port_width(source_node, source_port.name())
+                    input_width = self.get_port_width(node, 'in')
+                    if source_width < input_width:
+                        glue_errors.append(
+                            f"{node.name()}: Slice 输入需要 {input_width} 位，"
+                            f"但 {port_label(source_node, source_port.name())} 只有 {source_width} 位"
+                        )
+
+            elif glue_op == 'concat':
+                input_count = int(params.get('input_count', 4) or 4)
+                input_values = params.get('input_values', [])
+                output_width = self.get_port_width(node, 'out')
+                total_width = 0
+
+                for index in range(input_count):
+                    port_name = f'in{index}'
+                    input_connections = connected_ports_for(node, port_name, 'input')
+                    const_value = input_values[index].strip() if index < len(input_values) else ''
+
+                    if input_connections:
+                        input_width = self.get_port_width(node, port_name)
+                        total_width += input_width
+                        for source_port in input_connections:
+                            source_node = source_port.node()
+                            source_width = self.get_port_width(source_node, source_port.name())
+                            if source_width < input_width:
+                                glue_errors.append(
+                                    f"{node.name()}.{port_name}: 输入配置 {input_width} 位，"
+                                    f"但 {port_label(source_node, source_port.name())} 只有 {source_width} 位"
+                                )
+                    elif const_value:
+                        literal_width = parse_verilog_literal_width(const_value)
+                        if literal_width is None:
+                            glue_errors.append(
+                                f"{node.name()}.{port_name}: 常量 '{const_value}' 未注明合法位宽"
+                            )
+                        else:
+                            total_width += literal_width
+                    else:
+                        glue_errors.append(f"{node.name()}.{port_name}: 未连接且未填写常量")
+
+                if total_width != output_width:
+                    glue_errors.append(
+                        f"{node.name()}: Concat 输入/常量总位宽 {total_width} "
+                        f"与输出 out 位宽 {output_width} 不一致"
+                    )
+
+                if not connected_ports_for(node, 'out', 'output'):
+                    glue_errors.append(f"{node.name()}: Concat 输出 out 未连接")
+
+            elif glue_op == 'const':
+                if not connected_ports_for(node, 'out', 'output'):
+                    glue_errors.append(f"{node.name()}: Const 输出 out 未连接")
+
+        separator = "=" * 72
+        subsection = "-" * 72
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        report_lines = [
+            separator,
+            f"[GRAPH CHECK] 连线检查报告  {timestamp}",
+            separator,
+        ]
+
+        if unconnected:
+            report_lines.append(f"未连线端口 ({len(unconnected)}):")
+            report_lines.extend(f"  - {item}" for item in unconnected)
+        else:
+            report_lines.append("未连线端口: 无")
+
+        report_lines.append(subsection)
+
+        if width_errors:
+            report_lines.append(f"位宽不匹配 ({len(width_errors)}):")
+            report_lines.extend(f"  - {item}" for item in width_errors)
+        else:
+            report_lines.append("位宽不匹配: 无")
+
+        report_lines.append(subsection)
+
+        if glue_errors:
+            report_lines.append(f"Glue Logic 问题 ({len(glue_errors)}):")
+            report_lines.extend(f"  - {item}" for item in glue_errors)
+        else:
+            report_lines.append("Glue Logic 问题: 无")
+
+        total_issues = len(unconnected) + len(width_errors) + len(glue_errors)
+        report_lines.append(subsection)
+        report_lines.append(f"检查摘要: 共发现 {total_issues} 项问题")
+        report_lines.append(separator)
+
+        report = "\n".join(report_lines)
+        if print_report:
+            print(report)
+        if show_message:
+            QMessageBox.information(self, "检查完成", "检查完成，结果已输出到日志窗口")
+        return {
+            'report': report,
+            'unconnected': unconnected,
+            'width_errors': width_errors,
+            'glue_errors': glue_errors,
+            'total_issues': total_issues
+        }
     
     def open_library_config(self):
         # 打开Library库配置对话框
@@ -1958,24 +2353,8 @@ class IPXactVisualizer(QMainWindow):
             # 构建完整的模块名称
             full_module_name = f"{module_name}_{version}"
             
-            # 检查是否已存在相同的三层结构
-            existing_paths = []
-            for i in range(self.project_panel.topLevelItemCount()):
-                vendor_item = self.project_panel.topLevelItem(i)
-                vendor_name = vendor_item.text(0)
-                
-                for j in range(vendor_item.childCount()):
-                    project_item = vendor_item.child(j)
-                    project_item_name = project_item.text(0)
-                    
-                    for k in range(project_item.childCount()):
-                        module_item = project_item.child(k)
-                        module_item_name = module_item.text(0)
-                        existing_paths.append(f"{vendor_name}/{project_item_name}/{module_item_name}")
-            
-            new_path = f"Phytium/{project_name}/{full_module_name}"
-            if new_path in existing_paths:
-                QMessageBox.warning(self, "警告", f"相同的项目结构已存在: {new_path}")
+            if self._project_path_exists(project_name, full_module_name):
+                QMessageBox.warning(self, "警告", f"相同的项目结构已存在: Phytium/{project_name}/{full_module_name}")
                 return
             
             # 存储graph状态
@@ -1988,39 +2367,11 @@ class IPXactVisualizer(QMainWindow):
                 'connections': []
             }
             self.saved_graphs.append((full_module_name, graph_data))
-            
-            # 按照三层结构添加到project_panel
-            # 查找或创建vendor项 (Phytium)
-            vendor_item = None
-            for i in range(self.project_panel.topLevelItemCount()):
-                item = self.project_panel.topLevelItem(i)
-                if item.text(0) == "Phytium":
-                    vendor_item = item
-                    break
-            
-            if not vendor_item:
-                vendor_item = QTreeWidgetItem(self.project_panel)
-                vendor_item.setText(0, "Phytium")
-            
-            # 查找或创建project项
-            project_item = None
-            for i in range(vendor_item.childCount()):
-                item = vendor_item.child(i)
-                if item.text(0) == project_name:
-                    project_item = item
-                    break
-            
-            if not project_item:
-                project_item = QTreeWidgetItem(vendor_item)
-                project_item.setText(0, project_name)
-            
-            # 创建module项
-            module_item = QTreeWidgetItem(project_item)
-            module_item.setText(0, full_module_name)
-            module_item.setData(0, Qt.UserRole, len(self.saved_graphs) - 1)  # 存储索引
-            
-            # 展开所有层级
-            self.project_panel.expandAll()
+            module_item = self._add_graph_to_project_panel(
+                full_module_name,
+                graph_data,
+                len(self.saved_graphs) - 1
+            )
             
             # 选中新创建的项
             self.project_panel.setCurrentItem(module_item)
@@ -2036,6 +2387,8 @@ class IPXactVisualizer(QMainWindow):
             if self.current_project_index == -1:
                 QMessageBox.warning(self, "警告", "请先在Project面板中选择一个Graph项")
                 return
+
+            check_result = self.check_current_graph(show_message=False, print_report=False)
             
             # 序列化当前graph状态
             graph_data = self.graph.serialize_session()
@@ -2119,6 +2472,9 @@ class IPXactVisualizer(QMainWindow):
             # 生成Verilog代码到指定文件（如果指定了verilog_file）
             if verilog_file:
                 self.generate_verilog_code(verilog_file, graph_data)
+
+            if check_result and check_result.get('report'):
+                print(f"\n\n{check_result['report']}")
             
             QMessageBox.information(self, "成功", f"成功保存graph: {graph_name}")
         except Exception as e:
@@ -2371,6 +2727,19 @@ class IPXactVisualizer(QMainWindow):
                 if glue_info.get('op') == 'const':
                     return str(glue_info.get('params', {}).get('value', "1'b0"))
                 return None
+
+            def signal_subset_for_concat(signal, source_component_data, source_port, target_component_data, target_port):
+                if (
+                    target_component_data.get('glue', {}).get('op') != 'concat'
+                    or not target_port.startswith('in')
+                ):
+                    return signal
+
+                source_width = component_port_width(source_component_data, source_port)
+                target_width = component_port_width(target_component_data, target_port)
+                if source_width > target_width:
+                    return f"{signal}[{target_width - 1}:0]"
+                return signal
             
             # 提取所有输入和输出端口
             input_ports = []
@@ -2476,6 +2845,15 @@ class IPXactVisualizer(QMainWindow):
                                dst_node_type, dst_node_name, dst_port, dst_signal):
                 """顶层端口直连 instance；其它连接保留为 assign。"""
                 if is_glue_node(dst_node_type):
+                    dst_component_data = nodes_component_data.get(dst_node_name, {}).get('component_data', {})
+                    src_component_data = nodes_component_data.get(src_node_name, {}).get('component_data', {})
+                    src_signal = signal_subset_for_concat(
+                        src_signal,
+                        src_component_data,
+                        src_port,
+                        dst_component_data,
+                        dst_port
+                    )
                     glue_input_signals[(dst_node_name, dst_port)] = src_signal
                     if is_instance_node(src_node_type):
                         internal_wire_names.add(src_signal)
@@ -2669,39 +3047,83 @@ class IPXactVisualizer(QMainWindow):
                     continue
 
                 output_width = component_port_width(component_data, 'out')
-                template_data['internal_wires'].append({
-                    'name': out_signal,
-                    'width': output_width,
-                    'range': f'[{output_width - 1}:0]' if output_width > 1 else ''
-                })
+                use_direct_expression = False
+
+                def append_glue_output_wire():
+                    template_data['internal_wires'].append({
+                        'name': out_signal,
+                        'width': output_width,
+                        'range': f'[{output_width - 1}:0]' if output_width > 1 else ''
+                    })
 
                 if glue_op == 'const':
                     source_expr = str(params.get('value', "1'b0"))
+                    use_direct_expression = True
                 elif glue_op == 'slice':
                     input_signal = glue_input_signals.get((node_name, 'in'))
                     if not input_signal:
                         print(f"警告: Glue Slice {node_name} 缺少输入连接")
+                        append_glue_output_wire()
                         continue
                     msb = params.get('msb', 0)
                     lsb = params.get('lsb', 0)
                     source_expr = f"{input_signal}[{msb}:{lsb}]"
                 elif glue_op == 'concat':
                     concat_inputs = []
+                    has_connected_input = False
+                    concat_width = 0
+                    concat_error = False
                     input_count = int(params.get('input_count', 4) or 4)
                     input_values = params.get('input_values', [])
                     for index in range(input_count):
                         input_value = input_values[index] if index < len(input_values) else ''
-                        input_signal = glue_input_signals.get((node_name, f'in{index}')) or str(input_value).strip()
+                        connected_input = glue_input_signals.get((node_name, f'in{index}'))
+                        if connected_input:
+                            has_connected_input = True
+                            concat_width += component_port_width(component_data, f'in{index}')
+                            input_signal = connected_input
+                        else:
+                            input_signal = str(input_value).strip()
+                            if input_signal:
+                                literal_width = parse_verilog_literal_width(input_signal)
+                                if literal_width is None:
+                                    print(f"错误: Glue Concat {node_name} 的 in{index} 直接值 '{input_signal}' 未注明合法位宽")
+                                    concat_error = True
+                                    break
+                                concat_width += literal_width
                         if input_signal:
                             concat_inputs.append((index, input_signal))
+                    if concat_error:
+                        append_glue_output_wire()
+                        continue
                     if not concat_inputs:
                         print(f"警告: Glue Concat {node_name} 缺少输入连接")
+                        append_glue_output_wire()
+                        continue
+                    if concat_width != output_width:
+                        print(f"错误: Glue Concat {node_name} 输出位宽 {output_width} 与输入/常量总位宽 {concat_width} 不一致")
+                        append_glue_output_wire()
                         continue
                     ordered_inputs = [signal for _, signal in sorted(concat_inputs, reverse=True)]
-                    source_expr = '{' + ', '.join(ordered_inputs) + '}'
+                    source_expr = ordered_inputs[0] if len(ordered_inputs) == 1 else '{' + ', '.join(ordered_inputs) + '}'
+                    use_direct_expression = not has_connected_input
                 else:
                     print(f"警告: 不支持的 Glue Logic 类型: {glue_op}")
                     continue
+
+                if use_direct_expression:
+                    for key, signal_name in list(direct_instance_ports.items()):
+                        if signal_name == out_signal:
+                            direct_instance_ports[key] = source_expr
+                    for conn in template_data['connections']:
+                        if conn.get('source') == out_signal:
+                            conn['source'] = source_expr
+                        if conn.get('target') == out_signal:
+                            conn['target'] = source_expr
+                    if not any(signal_name == out_signal for signal_name in direct_instance_ports.values()):
+                        continue
+
+                append_glue_output_wire()
 
                 template_data['connections'].append({
                     'source': source_expr,
@@ -3054,42 +3476,16 @@ class IPXactVisualizer(QMainWindow):
                             else:
                                 module_name = graph_name
                                 version = '1.0'
+
+                    graph_name = f"{module_name}_{version}"
                     
                     # 添加到saved_graphs
+                    graph_index = len(self.saved_graphs)
                     self.saved_graphs.append((graph_name, graph_data))
-                    
-                    # 按照三层结构添加到project_panel
-                    # 查找或创建vendor项 (Phytium)
-                    vendor_item = None
-                    for i in range(self.project_panel.topLevelItemCount()):
-                        item = self.project_panel.topLevelItem(i)
-                        if item.text(0) == "Phytium":
-                            vendor_item = item
-                            break
-                    
-                    if not vendor_item:
-                        vendor_item = QTreeWidgetItem(self.project_panel)
-                        vendor_item.setText(0, "Phytium")
-                    
-                    # 查找或创建project项
-                    project_item = None
-                    for i in range(vendor_item.childCount()):
-                        item = vendor_item.child(i)
-                        if item.text(0) == project_name:
-                            project_item = item
-                            break
-                    
-                    if not project_item:
-                        project_item = QTreeWidgetItem(vendor_item)
-                        project_item.setText(0, project_name)
-                    
-                    # 创建module项
-                        module_item = QTreeWidgetItem(project_item)
-                        module_item.setText(0, graph_name)
-                        module_item.setData(0, Qt.UserRole, len(self.saved_graphs) - 1)  # 存储索引
+                    self._add_graph_to_project_panel(graph_name, graph_data, graph_index)
                         
                 except Exception as e:
-                    print(f"加载graph文件 {json_file} 失败: {e}")
+                    print(f"加载graph文件 {file_path} 失败: {e}")
             
             # 展开所有层级
             self.project_panel.expandAll()

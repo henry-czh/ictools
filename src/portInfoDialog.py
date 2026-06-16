@@ -14,28 +14,34 @@ class PortInfoDialog(QDialog):
         self.graph = graph
         self.parameters = parameters or []
         self.node_type = node_type or ""
-        self.show_param_group = self.node_type not in {
+        self.is_glue_node = self.node_type.startswith("user.glue.")
+        self.is_circle_node = self.node_type in {
             "user.circle.CircleNodeOut",
             "user.circle.CircleNodeIn",
             "usr.circle.CircleNodeOut",
             "usr.circle.CircleNodeIn",
         }
-        self.is_circle_node = not self.show_param_group
+        self.show_param_group = not self.is_circle_node and not self.is_glue_node
 
         # 创建布局
         layout = QVBoxLayout(self)
 
         # 创建端口表格
         self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["端口名称", "类型", "连接模块", "连接端口"])
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels([
+            "端口名称", "类型", "端口位宽", "连接模块", "连接端口", "连接端口位宽", "Const值"
+        ])
 
         # 设置表格属性
         # 第一列和第二列根据内容适应宽度，第三列和第四列填充剩余空间
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
@@ -188,6 +194,33 @@ class PortInfoDialog(QDialog):
 
         return self.node_name
 
+    def create_readonly_item(self, value):
+        item = QTableWidgetItem(str(value))
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        item.setTextAlignment(Qt.AlignVCenter)
+        return item
+
+    def get_glue_port_const_value(self, node, port_name):
+        """获取 Glue Logic 节点端口对应的直接常量值。"""
+        component_data = self.get_node_component_data(node)
+        glue_info = component_data.get('glue', {})
+        glue_op = glue_info.get('op', '')
+        params = glue_info.get('params', {})
+
+        if glue_op == 'const' and port_name == 'out':
+            return params.get('value', '')
+
+        if glue_op == 'concat' and port_name.startswith('in'):
+            try:
+                index = int(port_name[2:])
+            except Exception:
+                return ''
+            input_values = params.get('input_values', [])
+            if index < len(input_values):
+                return input_values[index]
+
+        return ''
+
     def get_node_ports(self, node_name, required_type=None):
         """
         获取指定节点的端口名称
@@ -216,7 +249,7 @@ class PortInfoDialog(QDialog):
 
     def update_port_combo(self, current_row, node_name):
         """更新指定行的"连接端口"下拉菜单"""
-        port_combo = self.table.cellWidget(current_row, 3)
+        port_combo = self.table.cellWidget(current_row, 4)
         if port_combo and isinstance(port_combo, QComboBox):
             port_combo.clear()
             port_combo.addItem("")
@@ -242,6 +275,23 @@ class PortInfoDialog(QDialog):
             ports = self.get_node_ports(node_name, required_type)
             for port in ports:
                 port_combo.addItem(port)
+            self.update_connection_width(current_row)
+
+    def update_connection_width(self, row):
+        """刷新连接端口位宽列。"""
+        node_combo = self.table.cellWidget(row, 3)
+        port_combo = self.table.cellWidget(row, 4)
+        width_text = ""
+        if (
+            node_combo and isinstance(node_combo, QComboBox)
+            and port_combo and isinstance(port_combo, QComboBox)
+        ):
+            node_name = node_combo.currentText()
+            port_name = port_combo.currentText()
+            node = self.get_node_by_name(node_name)
+            if node and port_name:
+                width_text = self.get_port_width(node, port_name)
+        self.table.setItem(row, 5, self.create_readonly_item(width_text))
 
     def fill_port_info(self, ports_info):
         """填充端口信息到表格"""
@@ -274,9 +324,10 @@ class PortInfoDialog(QDialog):
 
             if not connections:
                 # 无连接的情况
+                port_name = port_info.get('name', 'Unknown')
                 # 端口名称
                 name_item = self.create_port_name_item(
-                    current_node, port_info.get('name', 'Unknown')
+                    current_node, port_name
                 )
                 self.table.setItem(current_row, 0, name_item)
 
@@ -286,18 +337,27 @@ class PortInfoDialog(QDialog):
                 type_item.setTextAlignment(Qt.AlignVCenter)
                 self.table.setItem(current_row, 1, type_item)
 
+                self.table.setItem(current_row, 2, self.create_readonly_item(
+                    self.get_port_width(current_node, port_name) if current_node else ""
+                ))
+                self.table.setItem(current_row, 6, self.create_readonly_item(
+                    self.get_glue_port_const_value(current_node, port_name) if current_node else ""
+                ))
+
                 # 连接节点 - 下拉菜单
                 node_combo = QComboBox()
                 node_combo.addItem("无连接")
                 for node_name in all_node_names:
                     node_combo.addItem(node_name)
                 node_combo.currentTextChanged.connect(lambda text, row=current_row: self.on_node_changed(row, text))
-                self.table.setCellWidget(current_row, 2, node_combo)
+                self.table.setCellWidget(current_row, 3, node_combo)
 
                 # 连接端口 - 下拉菜单（已过滤）
                 port_combo = QComboBox()
                 port_combo.addItem("")
-                self.table.setCellWidget(current_row, 3, port_combo)
+                port_combo.currentTextChanged.connect(lambda text, row=current_row: self.update_connection_width(row))
+                self.table.setCellWidget(current_row, 4, port_combo)
+                self.update_connection_width(current_row)
 
                 current_row += 1
             else:
@@ -305,8 +365,9 @@ class PortInfoDialog(QDialog):
                 for i, conn in enumerate(connections):
                     # 端口名称（只在第一行显示，并设置跨行）
                     if i == 0:
+                        port_name_for_row = port_info.get('name', 'Unknown')
                         name_item = self.create_port_name_item(
-                            current_node, port_info.get('name', 'Unknown')
+                            current_node, port_name_for_row
                         )
                         self.table.setItem(current_row, 0, name_item)
 
@@ -316,10 +377,19 @@ class PortInfoDialog(QDialog):
                         type_item.setTextAlignment(Qt.AlignVCenter)
                         self.table.setItem(current_row, 1, type_item)
 
+                        self.table.setItem(current_row, 2, self.create_readonly_item(
+                            self.get_port_width(current_node, port_name_for_row) if current_node else ""
+                        ))
+                        self.table.setItem(current_row, 6, self.create_readonly_item(
+                            self.get_glue_port_const_value(current_node, port_name_for_row) if current_node else ""
+                        ))
+
                         # 合并单元格（如果有多个连接）
                         if num_connections > 1:
                             self.table.setSpan(current_row, 0, num_connections, 1)
                             self.table.setSpan(current_row, 1, num_connections, 1)
+                            self.table.setSpan(current_row, 2, num_connections, 1)
+                            self.table.setSpan(current_row, 6, num_connections, 1)
                     else:
                         # 后续行不需要设置，因为已经合并了
                         pass
@@ -342,18 +412,21 @@ class PortInfoDialog(QDialog):
                     else:
                         node_combo.setCurrentText("无连接")
                     node_combo.currentTextChanged.connect(lambda text, row=current_row: self.on_node_changed(row, text))
-                    self.table.setCellWidget(current_row, 2, node_combo)
+                    self.table.setCellWidget(current_row, 3, node_combo)
 
                     # 连接端口 - 下拉菜单（已过滤）
                     port_combo = QComboBox()
                     port_combo.addItem("")
+                    ports = []
                     if node_name in all_node_names:
                         ports = self.get_node_ports(node_name, required_type)
                         for p in ports:
                             port_combo.addItem(p)
                     if port_name and port_name in (ports if node_name in all_node_names else []):
                         port_combo.setCurrentText(port_name)
-                    self.table.setCellWidget(current_row, 3, port_combo)
+                    port_combo.currentTextChanged.connect(lambda text, row=current_row: self.update_connection_width(row))
+                    self.table.setCellWidget(current_row, 4, port_combo)
+                    self.update_connection_width(current_row)
 
                     current_row += 1
 
@@ -568,6 +641,17 @@ class PortInfoDialog(QDialog):
             source_width = self.get_port_width(source_node, source_port_name)
             target_width = self.get_port_width(target_node, target_port_name)
 
+            target_component_data = self.get_node_component_data(target_node)
+            target_glue_op = target_component_data.get('glue', {}).get('op')
+            if (
+                target_glue_op in ('concat', 'slice')
+                and target_port_name.startswith('in')
+            ):
+                if source_width >= target_width:
+                    return (True, "")
+                glue_name = 'Concat' if target_glue_op == 'concat' else 'Slice'
+                return (False, f"位宽不匹配: 源端口 '{source_port_name}' 宽度 {source_width} 位小于 {glue_name} 输入 '{target_port_name}' 宽度 {target_width} 位")
+
             if source_width != target_width:
                 return (False, f"位宽不匹配: 源端口 '{source_port_name}' 宽度 {source_width} 位 vs 目标端口 '{target_port_name}' 宽度 {target_width} 位")
 
@@ -646,6 +730,8 @@ class PortInfoDialog(QDialog):
             # 更新合并单元格的行数
             self.table.setSpan(span_row, 0, span_count + 1, 1)
             self.table.setSpan(span_row, 1, span_count + 1, 1)
+            self.table.setSpan(span_row, 2, span_count + 1, 1)
+            self.table.setSpan(span_row, 6, span_count + 1, 1)
         else:
             # 如果没有合并单元格，在当前行之后插入新行
             insert_row = current_row + 1
@@ -654,6 +740,8 @@ class PortInfoDialog(QDialog):
             # 设置合并单元格
             self.table.setSpan(current_row, 0, 2, 1)
             self.table.setSpan(current_row, 1, 2, 1)
+            self.table.setSpan(current_row, 2, 2, 1)
+            self.table.setSpan(current_row, 6, 2, 1)
 
         # 设置新行的后两列（连接节点和连接端口）
         # 连接节点 - 下拉菜单
@@ -662,12 +750,14 @@ class PortInfoDialog(QDialog):
         for node_name in all_node_names:
             node_combo.addItem(node_name)
         node_combo.currentTextChanged.connect(lambda text, row=insert_row: self.on_node_changed(row, text))
-        self.table.setCellWidget(insert_row, 2, node_combo)
+        self.table.setCellWidget(insert_row, 3, node_combo)
 
         # 连接端口 - 下拉菜单
         port_combo = QComboBox()
         port_combo.addItem("")
-        self.table.setCellWidget(insert_row, 3, port_combo)
+        port_combo.currentTextChanged.connect(lambda text, row=insert_row: self.update_connection_width(row))
+        self.table.setCellWidget(insert_row, 4, port_combo)
+        self.update_connection_width(insert_row)
 
         # 前两列不需要设置，因为已经合并了
         # 设置为空的项目
@@ -675,6 +765,8 @@ class PortInfoDialog(QDialog):
         empty_type_item = QTableWidgetItem("")
         self.table.setItem(insert_row, 0, empty_name_item)
         self.table.setItem(insert_row, 1, empty_type_item)
+        self.table.setItem(insert_row, 2, QTableWidgetItem(""))
+        self.table.setItem(insert_row, 6, QTableWidgetItem(""))
 
     def save_changes(self):
         """保存用户对表格的修改，更新graph中的连接关系"""
@@ -722,14 +814,14 @@ class PortInfoDialog(QDialog):
                 continue
 
             # 获取连接节点
-            node_combo = self.table.cellWidget(row, 2)
+            node_combo = self.table.cellWidget(row, 3)
             if not node_combo or not isinstance(node_combo, QComboBox):
                 continue
 
             connected_node_name = node_combo.currentText()
 
             # 获取连接端口
-            port_combo = self.table.cellWidget(row, 3)
+            port_combo = self.table.cellWidget(row, 4)
             if not port_combo or not isinstance(port_combo, QComboBox):
                 continue
 

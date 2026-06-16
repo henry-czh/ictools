@@ -263,6 +263,13 @@
         "items":[
           {
             "type":"command",
+            "label":"Const",
+            "file":"./hotkey_functions.py",
+            "function_name":"add_glue_const_node",
+            "shortcut":""
+          },
+          {
+            "type":"command",
             "label":"Slice",
             "file":"./hotkey_functions.py",
             "function_name":"add_glue_slice_node",

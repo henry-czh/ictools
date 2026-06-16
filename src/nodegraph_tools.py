@@ -564,6 +564,17 @@ def verilog_identifier(name, fallback='glue'):
     return identifier
 
 
+def parse_verilog_literal_width(value):
+    """解析带显式位宽的 Verilog 数值字符串，未注明位宽则返回 None。"""
+    match = re.match(r"^\s*(\d+)\s*'\s*[sS]?[bBoOdDhH]\s*[0-9a-fA-F_xXzZ?]+\s*$", str(value or ''))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
 def _glue_label(base_name, glue_op, params):
     if glue_op == 'const':
         value = params.get('value', "1'b0")
