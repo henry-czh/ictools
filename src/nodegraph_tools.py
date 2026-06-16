@@ -4,6 +4,7 @@ from Qt.QtGui import QColor, QPainter, QPen, QPainterPath
 from Qt.QtCore import Qt, QPointF
 import math
 from collections import defaultdict
+import xml.etree.ElementTree as ET
 
 class OrthogonalWirePainter:
     """正交布线（Orthogonal Routing）绘制器"""
@@ -541,6 +542,120 @@ class CircleNodeIn(BaseNodeCircle):
         self.add_output(port_name, display_name=False)
         self.PORT_NAME = port_name
         self.set_port_deletion_allowed(False)
+
+def _parse_bus_signal_widths(bus_def):
+    """从 bus definition 文件中读取逻辑信号位宽。"""
+    signal_widths = {}
+    file_path = (bus_def or {}).get('full_path', '')
+    if not file_path:
+        return signal_widths
+
+    try:
+        root = ET.parse(file_path).getroot()
+        namespace = 'http://www.accellera.org/XMLSchema/IPXACT/1685-2014'
+        for signal_elem in root.findall(f".//{{{namespace}}}signalDefinition"):
+            name_elem = signal_elem.find(f".//{{{namespace}}}name")
+            width_elem = signal_elem.find(f".//{{{namespace}}}width")
+            if name_elem is not None and name_elem.text:
+                width = width_elem.text if width_elem is not None and width_elem.text else 1
+                signal_widths[name_elem.text] = width
+    except Exception:
+        pass
+
+    return signal_widths
+
+def _circle_node_port_name(node):
+    """获取 circle 节点在 graph 上真实使用的端口名。"""
+    outputs = node.outputs()
+    if outputs:
+        return next(iter(outputs.keys()))
+
+    inputs = node.inputs()
+    if inputs:
+        return next(iter(inputs.keys()))
+
+    return getattr(node, 'port_name', 'in')
+
+def build_circle_node_component_data(node):
+    """为 CircleNodeIn/CircleNodeOut 构造用于 bus 校验和保存的 component_data。"""
+    node_type = getattr(node, 'type_', '')
+    if node_type not in ('user.circle.CircleNodeIn', 'user.circle.CircleNodeOut'):
+        return None
+
+    port_name = _circle_node_port_name(node)
+    port_type = getattr(node, 'port_type', 'signal')
+    width = getattr(node, 'width', 1) or 1
+
+    component_data = {
+        'name': node.name(),
+        'description': '',
+        'vendor': 'Phytium',
+        'library': 'interegrated',
+        'version': '1.0',
+        'ports': [],
+        'parameters': [],
+        'defines': [],
+        'bus_interfaces': [],
+        'port_maps': [],
+        'sv_file': '',
+        'xml_file_path': ''
+    }
+
+    if port_type != 'bus':
+        component_data['ports'].append({
+            'name': port_name,
+            'direction': 'out' if node_type == 'user.circle.CircleNodeIn' else 'in',
+            'width': width,
+            'msb': str(int(width) - 1) if str(width).isdigit() else '0',
+            'lsb': '0'
+        })
+        return component_data
+
+    bus_def = getattr(node, 'bus_def', None) or {}
+    bus_map = getattr(node, 'bus_map', None) or []
+    signal_widths = _parse_bus_signal_widths(bus_def)
+
+    port_maps = []
+    for bus_signal in bus_map:
+        logical_port = bus_signal.get('logical', '')
+        physical_port = bus_signal.get('physical', '') or logical_port
+        if not logical_port:
+            continue
+
+        signal_width = signal_widths.get(logical_port, 1)
+        component_data['ports'].append({
+            'name': physical_port,
+            'direction': 'out' if node_type == 'user.circle.CircleNodeIn' else 'in',
+            'width': signal_width,
+            'msb': str(int(signal_width) - 1) if str(signal_width).isdigit() else '0',
+            'lsb': '0'
+        })
+        port_maps.append({
+            'logical_port': logical_port,
+            'physical_port': physical_port,
+            'bus_interface': port_name
+        })
+
+    component_data['port_maps'] = port_maps
+    component_data['bus_interfaces'].append({
+        'name': port_name,
+        'bus_type': bus_def.get('name', getattr(node, 'bus_name', '')),
+        'mode': getattr(node, 'bus_mode', '') or 'master',
+        'vendor': bus_def.get('vendor', 'Phytium'),
+        'library': bus_def.get('library', 'LowSpeedDevice'),
+        'version': bus_def.get('version', '1.0'),
+        'port_maps': port_maps
+    })
+
+    return component_data
+
+def sync_circle_node_component_data(node):
+    """将 circle 节点的 bus/signal 属性同步为 component_data。"""
+    component_data = build_circle_node_component_data(node)
+    if component_data:
+        node.component_data = component_data
+        node.node_data = component_data
+    return component_data
 
 def get_all_connections(graph):
     """

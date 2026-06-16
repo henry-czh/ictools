@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (QInputDialog, QMessageBox, QDialog, QVBoxLayout,
 from PyQt5.QtCore import Qt
 
 # 导入自定义 BackdropNode
-from src.nodegraph_tools import BackdropNode
+from src.nodegraph_tools import BackdropNode, sync_circle_node_component_data
 
 def get_bus_definitions(busdef_dir=None):
     """
@@ -436,6 +436,7 @@ def add_circle_node_out(graph):
             node.bus_name = bus_def['name']
             node.bus_mode = bus_mode
             node.bus_map = bus_map
+        sync_circle_node_component_data(node)
         
         backdrop_node = _get_or_create_port_backdrop(
             graph, "Output Ports", (50, 50, 80, 100)
@@ -481,6 +482,7 @@ def add_circle_node_in(graph):
             node.bus_name = bus_def['name']
             node.bus_mode = bus_mode
             node.bus_map = bus_map
+        sync_circle_node_component_data(node)
         
         backdrop_node = _get_or_create_port_backdrop(
             graph, "Input Ports", (80, 50, 50, 100)

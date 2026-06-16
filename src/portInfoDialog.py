@@ -1,10 +1,11 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QTableWidget, QHeaderView, QHBoxLayout,
                     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QGroupBox, QLabel, QLineEdit, QGridLayout, QFileDialog, QMessageBox, QSplitter)
 from PyQt5.QtCore import Qt
+from src.nodegraph_tools import build_circle_node_component_data
 
 class PortInfoDialog(QDialog):
     """端口信息显示对话框"""
-    def __init__(self, node_name, ports_info, parent=None, graph=None, parameters=None):
+    def __init__(self, node_name, ports_info, parent=None, graph=None, parameters=None, node_type=None):
         super().__init__(parent)
         self.setWindowTitle(f"端口连线 - {node_name}")
         self.setGeometry(100, 100, 700, 500)
@@ -12,6 +13,14 @@ class PortInfoDialog(QDialog):
         self.node_name = node_name
         self.graph = graph
         self.parameters = parameters or []
+        self.node_type = node_type or ""
+        self.show_param_group = self.node_type not in {
+            "user.circle.CircleNodeOut",
+            "user.circle.CircleNodeIn",
+            "usr.circle.CircleNodeOut",
+            "usr.circle.CircleNodeIn",
+        }
+        self.is_circle_node = not self.show_param_group
 
         # 创建布局
         layout = QVBoxLayout(self)
@@ -31,30 +40,33 @@ class PortInfoDialog(QDialog):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
 
-        # 创建Parameter表格
-        self.param_group = QGroupBox("模块参数设置")
-        param_layout = QVBoxLayout()
+        if self.show_param_group:
+            # 创建Parameter表格
+            self.param_group = QGroupBox("模块参数设置")
+            param_layout = QVBoxLayout()
 
-        self.param_table = QTableWidget()
-        self.param_table.setColumnCount(3)
-        self.param_table.setHorizontalHeaderLabels(["参数名称", "默认值", "实例化值"])
-        self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.param_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.param_table.setAlternatingRowColors(True)
+            self.param_table = QTableWidget()
+            self.param_table.setColumnCount(3)
+            self.param_table.setHorizontalHeaderLabels(["参数名称", "默认值", "实例化值"])
+            self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+            self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            self.param_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+            self.param_table.setAlternatingRowColors(True)
 
-        # 填充parameter信息
-        self.fill_param_info()
+            # 填充parameter信息
+            self.fill_param_info()
 
-        param_layout.addWidget(self.param_table)
-        self.param_group.setLayout(param_layout)
+            param_layout.addWidget(self.param_table)
+            self.param_group.setLayout(param_layout)
 
-        # 使用Splitter分隔param_group和端口表格，比例2:8
+        # 使用Splitter分隔参数表格和端口表格
         splitter = QSplitter(Qt.Vertical)
-        splitter.addWidget(self.param_group)
+        if self.show_param_group:
+            splitter.addWidget(self.param_group)
         splitter.addWidget(self.table)
-        splitter.setStretchFactor(0, 2)  # param_group占2份
-        splitter.setStretchFactor(1, 8)  # 端口table占8份
+        if self.show_param_group:
+            splitter.setStretchFactor(0, 2)  # param_group占2份
+            splitter.setStretchFactor(1, 8)  # 端口table占8份
 
         # 填充端口信息
         self.fill_port_info(ports_info)
@@ -113,6 +125,9 @@ class PortInfoDialog(QDialog):
 
     def get_parameters(self):
         """获取用户修改后的parameter值"""
+        if not hasattr(self, 'param_table'):
+            return []
+
         result = []
         for row in range(self.param_table.rowCount()):
             name_item = self.param_table.item(row, 0)
@@ -146,6 +161,32 @@ class PortInfoDialog(QDialog):
             if node.name() == node_name:
                 return node
         return None
+
+    def get_current_node(self):
+        """获取当前对话框对应的节点对象"""
+        return self.get_node_by_name(self.node_name)
+
+    def get_item_port_name(self, item):
+        """获取表格项中保存的真实端口名称"""
+        if not item:
+            return ""
+        return item.data(Qt.UserRole) or item.text()
+
+    def create_port_name_item(self, node, port_name):
+        """创建端口名称列的显示项，并保存真实端口名用于连接逻辑"""
+        display_text = self.get_port_display_text(node, port_name)
+        name_item = QTableWidgetItem(display_text)
+        name_item.setData(Qt.UserRole, port_name)
+        name_item.setToolTip(f"真实端口: {port_name}")
+        name_item.setTextAlignment(Qt.AlignVCenter)
+        return name_item
+
+    def get_port_display_text(self, node, port_name):
+        """根据端口类型返回端口名称列显示文本"""
+        if not self.is_circle_node:
+            return port_name
+
+        return self.node_name
 
     def get_node_ports(self, node_name, required_type=None):
         """
@@ -204,6 +245,8 @@ class PortInfoDialog(QDialog):
 
     def fill_port_info(self, ports_info):
         """填充端口信息到表格"""
+        current_node = self.get_current_node()
+
         # 计算总行数（每个连接占一行）
         total_rows = 0
         for port_info in ports_info:
@@ -232,9 +275,9 @@ class PortInfoDialog(QDialog):
             if not connections:
                 # 无连接的情况
                 # 端口名称
-                name_item = QTableWidgetItem(port_info.get('name', 'Unknown'))
-                # 垂直居中对齐
-                name_item.setTextAlignment(Qt.AlignVCenter)
+                name_item = self.create_port_name_item(
+                    current_node, port_info.get('name', 'Unknown')
+                )
                 self.table.setItem(current_row, 0, name_item)
 
                 # 类型
@@ -262,9 +305,9 @@ class PortInfoDialog(QDialog):
                 for i, conn in enumerate(connections):
                     # 端口名称（只在第一行显示，并设置跨行）
                     if i == 0:
-                        name_item = QTableWidgetItem(port_info.get('name', 'Unknown'))
-                        # 垂直居中对齐
-                        name_item.setTextAlignment(Qt.AlignVCenter)
+                        name_item = self.create_port_name_item(
+                            current_node, port_info.get('name', 'Unknown')
+                        )
                         self.table.setItem(current_row, 0, name_item)
 
                         # 类型（只在第一行显示，并设置跨行）
@@ -314,6 +357,8 @@ class PortInfoDialog(QDialog):
 
                     current_row += 1
 
+        self.table.resizeRowsToContents()
+
     def on_node_changed(self, row, node_name):
         """当"连接节点"下拉菜单改变时，更新"连接端口"下拉菜单"""
         self.update_port_combo(row, node_name)
@@ -332,6 +377,9 @@ class PortInfoDialog(QDialog):
             return node.component_data
         elif hasattr(node, 'node_data') and node.node_data:
             return node.node_data
+        circle_component_data = build_circle_node_component_data(node)
+        if circle_component_data:
+            return circle_component_data
         return {}
 
     def get_port_width(self, node, port_name):
@@ -551,7 +599,7 @@ class PortInfoDialog(QDialog):
             QMessageBox.warning(self, "警告", "无法找到有效的端口信息")
             return
 
-        port_name = port_name_item.text()
+        port_name = self.get_item_port_name(port_name_item)
         port_type = type_item.text() if type_item else ""
 
         # 判断port_type是input，则不允许扇出连接
@@ -561,11 +609,7 @@ class PortInfoDialog(QDialog):
 
         # 如果是output类型，检查是否是bus interface，bus interface也不允许扇出连接
         if port_type == "output":
-            current_node = None
-            for node in self.graph.all_nodes():
-                if node.name() == self.windowTitle().split(" - ")[1]:
-                    current_node = node
-                    break
+            current_node = self.get_current_node()
 
             if current_node:
                 is_bus, bus_name = self.is_bus_interface_port(current_node, port_name)
@@ -579,7 +623,7 @@ class PortInfoDialog(QDialog):
         span_count = 0
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)
-            if item and item.text() == port_name:
+            if item and self.get_item_port_name(item) == port_name:
                 # 检查是否有合并
                 span = self.table.rowSpan(row, 0)
                 if span > 1:
@@ -636,11 +680,7 @@ class PortInfoDialog(QDialog):
             return
 
         # 获取当前节点
-        current_node = None
-        for node in self.graph.all_nodes():
-            if node.name() == self.windowTitle().split(" - ")[1]:
-                current_node = node
-                break
+        current_node = self.get_current_node()
 
         if not current_node:
             QMessageBox.warning(self, "警告", "无法找到当前节点")
@@ -668,7 +708,7 @@ class PortInfoDialog(QDialog):
 
             # 如果端口名称不为空，更新当前端口信息
             if port_name_item and port_name_item.text():
-                current_port_name = port_name_item.text()
+                current_port_name = self.get_item_port_name(port_name_item)
 
                 # 获取类型
                 type_item = self.table.item(row, 1)

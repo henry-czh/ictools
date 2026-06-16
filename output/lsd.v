@@ -2,99 +2,95 @@
 // Project: test
 // Module: test
 // Version: 1.0
-// Generated on: 2026-06-04 09:01:20
+// Generated on: 2026-06-16 10:29:12
 
 module test (
     // input Ports
-    input  clk,
-    input  rst,
+    input         clk,
+    input         rst,
     // output Ports
-    output reg  data_out,
-    output reg  finish,
-    output reg  ok
+    output        finish,
+    output        ok,
+    output        dong,
+    output [31:0] rdata,
+    output [31:0] wdata,
+    output [31:0] out_data
 );
 
     // Internal wires
-    wire  u_QSPI_v1_0_0_clk;
-    wire  u_QSPI_v1_0_0_rst;
     wire [31:0] u_QSPI_v1_0_0_data_in;
     wire [31:0] u_QSPI_v1_0_0_data_out;
-    wire  u_can_v1_0_3_clk;
-    wire  u_can_v1_0_3_rst_n;
+    wire        u_can_v1_0_3_rst_n;
     wire [31:0] u_can_v1_0_3_data_in;
     wire [31:0] u_can_v1_0_3_data_out;
-    wire [7:0] u_can_v1_0_3_addr_in;
-    wire  u_can_v1_0_3_wr_en;
-    wire  u_can_v1_0_3_rd_en;
-    wire  u_can_v1_0_3_busy;
-    wire  u_can_v1_0_3_done;
+    wire [7:0]  u_can_v1_0_3_addr_in;
+    wire        u_can_v1_0_3_wr_en;
+    wire        u_can_v1_0_3_rd_en;
+    wire        u_can_v1_0_3_busy;
+    wire        u_can_v1_0_3_done;
     wire [31:0] u_can_v1_0_3_data_bus;
-    wire [3:0] u_can_v1_0_3_byte_en;
+    wire [3:0]  u_can_v1_0_3_byte_en;
     wire [15:0] u_can_v1_0_3_param_data_in;
     wire [15:0] u_can_v1_0_3_param_data_out;
-    wire  u_can_slv_v1_0_2_clk;
-    wire  u_can_slv_v1_0_2_rst_n;
+    wire        u_can_slv_v1_0_2_clk;
+    wire        u_can_slv_v1_0_2_rst_n;
     wire [31:0] u_can_slv_v1_0_2_data_in;
     wire [31:0] u_can_slv_v1_0_2_data_out;
-    wire [7:0] u_can_slv_v1_0_2_addr_in;
-    wire  u_can_slv_v1_0_2_wr_en;
-    wire  u_can_slv_v1_0_2_rd_en;
-    wire  u_can_slv_v1_0_2_busy;
-    wire  u_can_slv_v1_0_2_done;
-    wire [31:0] u_can_slv_v1_0_2_data_bus;
-    wire [3:0] u_can_slv_v1_0_2_byte_en;
+    wire [7:0]  u_can_slv_v1_0_2_addr_in;
+    wire        u_can_slv_v1_0_2_wr_en;
+    wire        u_can_slv_v1_0_2_rd_en;
+    wire        u_can_slv_v1_0_2_busy;
+    wire        u_can_slv_v1_0_2_done;
+    wire [3:0]  u_can_slv_v1_0_2_byte_en;
     wire [15:0] u_can_slv_v1_0_2_param_data_in;
     wire [15:0] u_can_slv_v1_0_2_param_data_out;
 
     // Component instances
     QSPI_1_0
     u_QSPI_v1_0_0 (
-        .clk(u_QSPI_v1_0_0_clk),
-        .rst(u_QSPI_v1_0_0_rst),
-        .data_in(u_QSPI_v1_0_0_data_in),
+        .clk     (clk),
+        .rst     (rst),
+        .data_in (u_QSPI_v1_0_0_data_in),
         .data_out(u_QSPI_v1_0_0_data_out));
 
-    can_1_0 #(
+    can_1_0     #(
         .P_DATA_WIDTH(16),
         .P_ADDR_WIDTH(4))
     u_can_v1_0_3 (
-        .clk(u_can_v1_0_3_clk),
-        .rst_n(u_can_v1_0_3_rst_n),
-        .data_in(u_can_v1_0_3_data_in),
-        .data_out(u_can_v1_0_3_data_out),
-        .addr_in(u_can_v1_0_3_addr_in),
-        .wr_en(u_can_v1_0_3_wr_en),
-        .rd_en(u_can_v1_0_3_rd_en),
-        .busy(u_can_v1_0_3_busy),
-        .done(u_can_v1_0_3_done),
-        .data_bus(u_can_v1_0_3_data_bus),
-        .byte_en(u_can_v1_0_3_byte_en),
-        .param_data_in(u_can_v1_0_3_param_data_in),
+        .clk           (clk),
+        .rst_n         (u_can_v1_0_3_rst_n),
+        .data_in       (rdata),
+        .data_out      (wdata),
+        .addr_in       (u_can_v1_0_3_addr_in),
+        .wr_en         (u_can_v1_0_3_wr_en),
+        .rd_en         (u_can_v1_0_3_rd_en),
+        .busy          (u_can_v1_0_3_busy),
+        .done          (u_can_v1_0_3_done),
+        .data_bus      (u_can_v1_0_3_data_bus),
+        .byte_en       (u_can_v1_0_3_byte_en),
+        .param_data_in (u_can_v1_0_3_param_data_in),
         .param_data_out(u_can_v1_0_3_param_data_out));
 
     can_slv_1_0 #(
         .P_DATA_WIDTH(16),
         .P_ADDR_WIDTH(4))
     u_can_slv_v1_0_2 (
-        .clk(u_can_slv_v1_0_2_clk),
-        .rst_n(u_can_slv_v1_0_2_rst_n),
-        .data_in(u_can_slv_v1_0_2_data_in),
-        .data_out(u_can_slv_v1_0_2_data_out),
-        .addr_in(u_can_slv_v1_0_2_addr_in),
-        .wr_en(u_can_slv_v1_0_2_wr_en),
-        .rd_en(u_can_slv_v1_0_2_rd_en),
-        .busy(u_can_slv_v1_0_2_busy),
-        .done(u_can_slv_v1_0_2_done),
-        .data_bus(u_can_slv_v1_0_2_data_bus),
-        .byte_en(u_can_slv_v1_0_2_byte_en),
-        .param_data_in(u_can_slv_v1_0_2_param_data_in),
+        .clk           (u_can_slv_v1_0_2_clk),
+        .rst_n         (u_can_slv_v1_0_2_rst_n),
+        .data_in       (u_can_slv_v1_0_2_data_in),
+        .data_out      (u_can_slv_v1_0_2_data_out),
+        .addr_in       (u_can_slv_v1_0_2_addr_in),
+        .wr_en         (u_can_slv_v1_0_2_wr_en),
+        .rd_en         (u_can_slv_v1_0_2_rd_en),
+        .busy          (u_can_slv_v1_0_2_busy),
+        .done          (u_can_slv_v1_0_2_done),
+        .data_bus      (out_data),
+        .byte_en       (u_can_slv_v1_0_2_byte_en),
+        .param_data_in (u_can_slv_v1_0_2_param_data_in),
         .param_data_out(u_can_slv_v1_0_2_param_data_out));
 
     // Connections
-    assign u_QSPI_v1_0_0_clk = clk;
-    assign u_QSPI_v1_0_0_rst = rst;
-    assign u_can_v1_0_3_clk = clk;
     assign u_can_slv_v1_0_2_data_out = u_can_v1_0_3_data_in;
-    assign u_can_slv_v1_0_2_data_in = u_can_v1_0_3_data_out;
+    assign u_can_slv_v1_0_2_data_in  = u_can_v1_0_3_data_out;
 
 endmodule

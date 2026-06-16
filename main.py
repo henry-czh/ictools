@@ -15,7 +15,9 @@ from src.ipxact_parser import IPXactParser
 from src.ipxact_writer import IPXactWriter
 from NodeGraphQt import BaseNode, NodeGraph
 from src.nodegraph_tools import (get_all_connections, make_template_node, 
-                                 CircleNodeIn, CircleNodeOut)
+                                 CircleNodeIn, CircleNodeOut,
+                                 build_circle_node_component_data,
+                                 sync_circle_node_component_data)
 from src.portInfoDialog import PortInfoDialog 
 from src.newBusDefDialog import NewBusDefDialog
 from src.newComponentDialog import NewComponentDialog
@@ -654,7 +656,7 @@ class IPXactVisualizer(QMainWindow):
             parameters = node.component_data.get('parameters', [])
 
         # 打开端口信息对话框
-        dialog = PortInfoDialog(node_name, ports_info, self, self.graph, parameters)
+        dialog = PortInfoDialog(node_name, ports_info, self, self.graph, parameters, node.type_)
         dialog.exec_()
     
     def get_node_ports_info(self, node):
@@ -1108,6 +1110,9 @@ class IPXactVisualizer(QMainWindow):
                 node_name = node.name()
                 if node_name in nodes_component_data:
                     node.component_data = nodes_component_data[node_name].get('component_data')
+                    node.node_data = node.component_data
+                elif node.type_ in ('user.circle.CircleNodeIn', 'user.circle.CircleNodeOut'):
+                    sync_circle_node_component_data(node)
             
             # 恢复节点位置信息
             node_positions = graph_data.get('node_positions', {})
@@ -1638,6 +1643,9 @@ class IPXactVisualizer(QMainWindow):
             return node.component_data
         elif hasattr(node, 'node_data') and node.node_data:
             return node.node_data
+        circle_component_data = build_circle_node_component_data(node)
+        if circle_component_data:
+            return circle_component_data
         return {}
 
     def get_port_width(self, node, port_name):
@@ -2020,6 +2028,12 @@ class IPXactVisualizer(QMainWindow):
             # 收集所有节点的component_data
             nodes_component_data = {}
             for node in self.graph.all_nodes():
+                if (
+                    node.type_ in ('user.circle.CircleNodeIn', 'user.circle.CircleNodeOut')
+                    and not getattr(node, 'component_data', None)
+                ):
+                    sync_circle_node_component_data(node)
+
                 if hasattr(node, 'component_data') and node.component_data:
                     node_name = node.name()
                     node_type = node.__class__.__name__
@@ -2226,14 +2240,97 @@ class IPXactVisualizer(QMainWindow):
                 'parameters': [],
                 'input_ports': [],
                 'output_ports': [],
+                'inout_ports': [],
                 'internal_wires': [],
                 'instances': [],
                 'connections': []
             }
+
+            # 从graph_data中获取保存的节点组件数据
+            nodes_component_data = graph_data.get('nodes_component_data', {})
+
+            def normalize_width(width):
+                """将端口位宽转换为模板可用的整数。"""
+                if isinstance(width, int):
+                    return width
+                try:
+                    return int(width)
+                except Exception:
+                    try:
+                        return int(eval(str(width))) if width else 1
+                    except Exception:
+                        return 1
+
+            def logical_to_physical(bus_info):
+                """从 bus interface 中提取 logical port 到 physical signal 的映射。"""
+                result = {}
+                for pm in bus_info.get('port_maps', []):
+                    logical = pm.get('logical_port', '')
+                    physical = pm.get('physical_port', '')
+                    if logical and physical:
+                        result[logical] = physical
+                return result
+
+            def endpoint_signal(node_type, node_name, port_name, physical_port=None):
+                """将 graph endpoint 转换成 Verilog 中展开后的 signal 名。"""
+                if node_type == 'user.circle.CircleNodeIn':
+                    return physical_port or node_name
+                if node_type == 'user.circle.CircleNodeOut':
+                    return physical_port or node_name
+                return f"{node_name}_{physical_port or port_name}"
+
+            def is_top_port_node(node_type):
+                return node_type in ('user.circle.CircleNodeIn', 'user.circle.CircleNodeOut')
+
+            def is_instance_node(node_type):
+                return (
+                    node_type not in (
+                        'user.circle.CircleNodeIn',
+                        'user.circle.CircleNodeOut',
+                        'nodeGraphQt.nodes.BackdropNode'
+                    )
+                )
+
+            def normalize_direction(direction):
+                direction = (direction or '').lower()
+                return {
+                    'in': 'input',
+                    'out': 'output',
+                    'input': 'input',
+                    'output': 'output',
+                    'inout': 'inout'
+                }.get(direction, direction)
+
+            def top_port_direction(node_type, port_direction=None):
+                if normalize_direction(port_direction) == 'inout':
+                    return 'inout'
+                if node_type == 'user.circle.CircleNodeIn':
+                    return 'input'
+                if node_type == 'user.circle.CircleNodeOut':
+                    return 'output'
+                return normalize_direction(port_direction)
+
+            def make_port_decl(name, direction, width):
+                width = normalize_width(width)
+                return {
+                    'name': name,
+                    'direction': direction,
+                    'width': width,
+                    'range': f'[{width - 1}:0]' if width > 1 else ''
+                }
+
+            def add_top_port(port):
+                if port['direction'] == 'input':
+                    input_ports.append(port)
+                elif port['direction'] == 'inout':
+                    inout_ports.append(port)
+                else:
+                    output_ports.append(port)
             
             # 提取所有输入和输出端口
             input_ports = []
             output_ports = []
+            inout_ports = []
             
             # 遍历节点，收集端口信息
             for node_id, node_data in nodes.items():
@@ -2242,48 +2339,59 @@ class IPXactVisualizer(QMainWindow):
                 # 处理CircleNodeIn（输入端口）
                 if node_type == 'user.circle.CircleNodeIn':
                     node_name = node_data.get('name', f'input_{node_id}')
-                    input_ports.append({
-                        'name': node_name,
-                        'direction': 'input',
-                        'width': 1
-                    })
+                    component_data = nodes_component_data.get(node_name, {}).get('component_data', {})
+                    if component_data.get('bus_interfaces'):
+                        for port in component_data.get('ports', []):
+                            add_top_port(make_port_decl(
+                                port.get('name', node_name),
+                                top_port_direction(node_type, port.get('direction')),
+                                port.get('width', 1)
+                            ))
+                    else:
+                        port_info = next(iter(component_data.get('ports', [])), {})
+                        add_top_port(make_port_decl(
+                            node_name,
+                            top_port_direction(node_type, port_info.get('direction')),
+                            port_info.get('width', 1)
+                        ))
                 
                 # 处理CircleNodeOut（输出端口）
                 elif node_type == 'user.circle.CircleNodeOut':
                     node_name = node_data.get('name', f'output_{node_id}')
-                    output_ports.append({
-                        'name': node_name,
-                        'direction': 'output',
-                        'width': 1
-                    })
+                    component_data = nodes_component_data.get(node_name, {}).get('component_data', {})
+                    if component_data.get('bus_interfaces'):
+                        for port in component_data.get('ports', []):
+                            add_top_port(make_port_decl(
+                                port.get('name', node_name),
+                                top_port_direction(node_type, port.get('direction')),
+                                port.get('width', 1)
+                            ))
+                    else:
+                        port_info = next(iter(component_data.get('ports', [])), {})
+                        add_top_port(make_port_decl(
+                            node_name,
+                            top_port_direction(node_type, port_info.get('direction')),
+                            port_info.get('width', 1)
+                        ))
             
             # 合并端口列表
             template_data['input_ports'] = input_ports
             template_data['output_ports'] = output_ports
+            template_data['inout_ports'] = inout_ports
             
-            # 从graph_data中获取保存的节点组件数据
-            nodes_component_data = graph_data.get('nodes_component_data', {})
-
-            # 提取组件实例信息
-            instance_id_map = {}
+            instance_nodes = []
             for node_id, node_data in nodes.items():
                 node_type = node_data.get('type_', '')
 
-                # 跳过CircleNodeIn和CircleNodeOut 和 BackdropNode
-                if node_type in ['user.circle.CircleNodeIn', 'user.circle.CircleNodeOut', 'nodeGraphQt.nodes.BackdropNode']:
+                if not is_instance_node(node_type):
                     continue
 
-                # 从节点类型中提取组件名称
-                # 节点类型格式是"user.{component_name}_node"
                 if node_type.startswith('user.') and node_type.endswith('_node'):
                     component_name = node_type[5:-5]  # 去掉"user."和"_node"
                 else:
                     component_name = 'UnknownComponent'
 
                 instance_name = node_data.get('name', f'inst_{node_id}')
-
-                # 记录实例ID映射
-                instance_id_map[node_id] = instance_name
 
                 # 从nodes_component_data中查找组件信息
                 component_data = None
@@ -2295,46 +2403,33 @@ class IPXactVisualizer(QMainWindow):
                 if not component_data:
                     print(f"警告: 找不到组件 {component_name} 的信息, instance_name:{instance_name},node name:{node_name}")
                     continue
-                
-                # 提取组件的参数
-                instance_params = []
-                for param in component_data.get('parameters', []):
-                    instance_params.append({
-                        'name': param.get('name', 'UnknownParam'),
-                        'value': param.get('value', param.get('default_value', '0'))
-                    })
-                
-                # 提取组件的端口连接
-                port_connections = []
-                for port in component_data.get('ports', []):
-                    port_name = port.get('name', 'UnknownPort')
-                    port_connections.append({
-                        'port_name': port_name,
-                        'signal_name': f'{instance_name}_{port_name}'
-                    })
-                
-                # 添加实例信息
-                template_data['instances'].append({
+
+                instance_nodes.append({
                     'module_name': component_name,
                     'instance_name': instance_name,
-                    'parameters': instance_params,
-                    'port_connections': port_connections
+                    'component_data': component_data
                 })
-                
-                # 添加内部连线
-                for port in component_data.get('ports', []):
-                    port_name = port.get('name', 'UnknownPort')
-                    port_width = port.get('width', 1)
-                    if isinstance(port_width, str):
-                        try:
-                            port_width = eval(port_width) if port_width else 1
-                        except:
-                            port_width = 1
-                    port_width = int(port_width) if port_width else 1
-                    template_data['internal_wires'].append({
-                        'name': f'{instance_name}_{port_name}',
-                        'width': port_width
-                    })
+
+            direct_instance_ports = {}
+            internal_wire_names = set()
+
+            def bind_or_assign(src_node_type, src_node_name, src_port, src_signal,
+                               dst_node_type, dst_node_name, dst_port, dst_signal):
+                """顶层端口直连 instance；其它连接保留为 assign。"""
+                if is_top_port_node(src_node_type) and is_instance_node(dst_node_type):
+                    direct_instance_ports[(dst_node_name, dst_port)] = src_signal
+                    return
+                if is_instance_node(src_node_type) and is_top_port_node(dst_node_type):
+                    direct_instance_ports[(src_node_name, src_port)] = dst_signal
+                    return
+
+                template_data['connections'].append({
+                    'source': src_signal,
+                    'target': dst_signal
+                })
+                for signal in (src_signal, dst_signal):
+                    if '_' in signal and signal not in (src_node_name, dst_node_name):
+                        internal_wire_names.add(signal)
             
             # 处理连接关系
             for conn in connections:
@@ -2441,48 +2536,112 @@ class IPXactVisualizer(QMainWindow):
                             src_physical = src_logical_to_physical[logical_port]
                             dst_physical = dst_logical_to_physical[logical_port]
 
-                            # 确定源信号名称
-                            if src_node_type == 'user.circle.CircleNodeIn':
-                                src_signal = src_node_name
-                            else:
-                                src_signal = f'{src_node_name}_{src_physical}'
+                            src_signal = endpoint_signal(src_node_type, src_node_name, src_port, src_physical)
+                            dst_signal = endpoint_signal(dst_node_type, dst_node_name, dst_port, dst_physical)
 
-                            # 确定目标信号名称
-                            if dst_node_type == 'user.circle.CircleNodeOut':
-                                dst_signal = dst_node_name
-                            else:
-                                dst_signal = f'{dst_node_name}_{dst_physical}'
-
-                            # 添加连接
-                            template_data['connections'].append({
-                                'source': src_signal,
-                                'target': dst_signal
-                            })
+                            bind_or_assign(
+                                src_node_type, src_node_name, src_physical, src_signal,
+                                dst_node_type, dst_node_name, dst_physical, dst_signal
+                            )
                             print(f"添加连接: {src_signal} -> {dst_signal}")
                 else:
                     print(f"处理普通端口连接: {src_node_name} -> {dst_node_name}")
-                    # 普通端口连接
-                    # 确定源信号名称
-                    if src_node_type == 'user.circle.CircleNodeIn':
-                        # 输入端口连接到实例
-                        src_signal = src_node_name
-                    else:
-                        # 实例输出连接到其他
-                        src_signal = f'{src_node_name}_{src_port}'
+                    src_physical = None
+                    dst_physical = None
+                    if src_bus_info:
+                        src_bus_map = logical_to_physical(src_bus_info)
+                        src_physical = next(iter(src_bus_map.values()), None)
+                    if dst_bus_info:
+                        dst_bus_map = logical_to_physical(dst_bus_info)
+                        dst_physical = next(iter(dst_bus_map.values()), None)
 
-                    # 确定目标信号名称
-                    if dst_node_type == 'user.circle.CircleNodeOut':
-                        # 实例输出连接到输出端口
-                        dst_signal = dst_node_name
-                    else:
-                        # 实例输出连接到实例输入
-                        dst_signal = f'{dst_node_name}_{dst_port}'
+                    src_signal = endpoint_signal(src_node_type, src_node_name, src_port, src_physical)
+                    dst_signal = endpoint_signal(dst_node_type, dst_node_name, dst_port, dst_physical)
 
-                    # 添加连接
-                    template_data['connections'].append({
-                        'source': src_signal,
-                        'target': dst_signal
+                    bind_or_assign(
+                        src_node_type, src_node_name, src_physical or src_port, src_signal,
+                        dst_node_type, dst_node_name, dst_physical or dst_port, dst_signal
+                    )
+
+            for instance in instance_nodes:
+                component_data = instance['component_data']
+                instance_name = instance['instance_name']
+
+                instance_params = []
+                for param in component_data.get('parameters', []):
+                    instance_params.append({
+                        'name': param.get('name', 'UnknownParam'),
+                        'value': param.get('value', param.get('default_value', '0'))
                     })
+
+                port_connections = []
+                for port in component_data.get('ports', []):
+                    port_name = port.get('name', 'UnknownPort')
+                    signal_name = direct_instance_ports.get(
+                        (instance_name, port_name),
+                        f'{instance_name}_{port_name}'
+                    )
+                    port_connections.append({
+                        'port_name': port_name,
+                        'signal_name': signal_name
+                    })
+
+                    internal_wire_name = f'{instance_name}_{port_name}'
+                    if signal_name == internal_wire_name:
+                        internal_wire_names.add(internal_wire_name)
+
+                template_data['instances'].append({
+                    'module_name': instance['module_name'],
+                    'instance_name': instance_name,
+                    'parameters': instance_params,
+                    'port_connections': port_connections
+                })
+
+                for port in component_data.get('ports', []):
+                    port_name = port.get('name', 'UnknownPort')
+                    wire_name = f'{instance_name}_{port_name}'
+                    if wire_name not in internal_wire_names:
+                        continue
+                    wire_width = normalize_width(port.get('width', 1))
+                    template_data['internal_wires'].append({
+                        'name': wire_name,
+                        'width': wire_width,
+                        'range': f'[{wire_width - 1}:0]' if wire_width > 1 else ''
+                    })
+
+            def apply_alignment():
+                all_ports = (
+                    template_data['input_ports'] +
+                    template_data['output_ports'] +
+                    template_data['inout_ports']
+                )
+                max_port_direction = max((len(p['direction']) for p in all_ports), default=0)
+                max_port_range = max((len(p.get('range', '')) for p in all_ports), default=0)
+                for port in all_ports:
+                    port['direction_pad'] = port['direction'].ljust(max_port_direction)
+                    port['range_pad'] = port.get('range', '').ljust(max_port_range)
+
+                max_wire_range = max((len(w.get('range', '')) for w in template_data['internal_wires']), default=0)
+                for wire in template_data['internal_wires']:
+                    wire['range_pad'] = wire.get('range', '').ljust(max_wire_range)
+
+                max_module_name = max((len(i['module_name']) for i in template_data['instances']), default=0)
+                for instance in template_data['instances']:
+                    instance['module_name_pad'] = instance['module_name'].ljust(max_module_name)
+
+                    max_param_name = max((len(p['name']) for p in instance.get('parameters', [])), default=0)
+                    for param in instance.get('parameters', []):
+                        param['name_pad'] = param['name'].ljust(max_param_name)
+
+                    max_port_name = max((len(c['port_name']) for c in instance.get('port_connections', [])), default=0)
+                    for conn in instance.get('port_connections', []):
+                        conn['port_name_pad'] = conn['port_name'].ljust(max_port_name)
+
+                max_conn_target = max((len(c['target']) for c in template_data['connections']), default=0)
+                for conn in template_data['connections']:
+                    conn['target_pad'] = conn['target'].ljust(max_conn_target)
+
+            apply_alignment()
             
             # 加载模板
             template_dir = os.path.dirname(__file__)
